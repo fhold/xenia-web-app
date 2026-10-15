@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Xenia</title>
+
+    <!-- PWA / standalone app (Add-to-Home-Screen) -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#7B9FCC" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Xenia" />
+    <link rel="apple-touch-icon" href="/icon-512.svg" />
+
+    <!-- Fonts: DM Sans (body) + JetBrains Mono (numbers) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@300;400;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      /* Reset & base */
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html, body, #root {
+        height: 100%;
+        width: 100%;
+        overscroll-behavior-y: none; /* no pull-to-refresh / overscroll bounce */
+      }
+
+      /* Dark UA widgets: without this the browser renders scrollbars, select
+         popups and number spinners in the light scheme. */
+      html {
+        color-scheme: dark;
+        scrollbar-width: thin;                    /* Firefox — inherits downwards */
+        scrollbar-color: #2C3444 transparent;
+      }
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb {
+        background: #2C3444;
+        border-radius: 999px;
+        /* padding-box keeps the thumb inset on any panel background */
+        border: 2px solid transparent;
+        background-clip: padding-box;
+      }
+      ::-webkit-scrollbar-thumb:hover { background: #3A4055; background-clip: padding-box; }
+      ::-webkit-scrollbar-corner { background: transparent; }
+
+      /* theme.bg / theme.txt — synced with src/theme.ts, update both if changing */
+      /* Zahlenfelder app-weit ohne Spinner: die Pfeile reservieren Breite und
+         zerreissen jede kompakte Inline-Zeile (Limiter, Exit-Chips). */
+      input[type=number]::-webkit-outer-spin-button,
+      input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+      input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+
+      body {
+        background-color: #0B0D11;
+        color: #E2E4EA;
+        font-family: 'DM Sans', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        overflow-x: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

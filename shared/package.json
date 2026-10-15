@@ -1,0 +1,14 @@
+{
+  "name": "@xenia/shared",
+  "version": "0.1.0",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "description": "Shared TypeScript types between backend and frontend",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
