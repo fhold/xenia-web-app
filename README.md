@@ -61,6 +61,26 @@ Open `http://<host>:<PORT>` in a browser. Health check: `/health`.
 The database uses WAL mode — back it up with `sqlite3 xenia.db ".backup backup.db"`,
 not by copying the file while the app runs.
 
+## Install as an app on Android (full screen)
+
+Browsers install a web app as a standalone app (own icon, no address bar) only when
+it is served over HTTPS. Over a plain LAN address such as `http://192.168.1.50:3000`
+Chrome just adds a shortcut that opens in a normal tab. The easiest way to get HTTPS
+at home is [Tailscale](https://tailscale.com):
+
+1. Install Tailscale on the machine that runs the app and on the tablet or phone,
+   both in the same tailnet.
+2. In the Tailscale admin console, enable **MagicDNS** and **HTTPS certificates**
+   (DNS settings).
+3. On the app machine: `tailscale serve --bg 3000` (use your `PORT`). The app is now
+   reachable at `https://<machine-name>.<your-tailnet>.ts.net` — from devices in your
+   tailnet only, at home and on the road.
+4. Open that address in Chrome on Android → menu → **Install app** (or *Add to home
+   screen*). It starts in its own window without the browser bar, in landscape.
+
+⚠ Use `tailscale serve`, **not** `tailscale funnel` — funnel publishes the app to the
+internet, and the app has no login.
+
 ## Development
 
 ```bash
@@ -87,6 +107,13 @@ cd backend && npm test
   `shared/src/bbw-lag-calibration.ts`. Beanconqueror's brew-by-weight approach also
   inspired `shared/src/brew-by-weight.ts`.
 - `backend/scripts/import-beanconqueror.ts` imports beans from a Beanconqueror export.
+
+## Feedback
+
+This is a hobby project without any support promise. Bug reports and ideas are welcome
+as GitHub issues — please include your firmware version, your scale and what you did.
+Whether and when something gets fixed depends on my spare time. Pull requests are
+welcome too; by contributing you agree to license your changes under GPL-3.0.
 
 ## License
 
