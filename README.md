@@ -47,16 +47,21 @@ Build both packages; the backend then serves the frontend on one port.
 ```bash
 cd frontend && npm run build
 cd ../backend && npm run build
-MACHINE_IP=192.168.1.100 PORT=3000 DB_PATH=/var/lib/xenia/xenia.db npm start
+NODE_ENV=production MACHINE_IP=192.168.1.100 PORT=3000 DB_PATH=/var/lib/xenia/xenia.db npm start
 ```
 
 | Variable | Meaning | Default |
 |---|---|---|
+| `NODE_ENV` | Must be `production` — otherwise the backend serves only the API and `/` answers "Route GET:/ not found" | — |
 | `MACHINE_IP` | Address of your Xenia on the LAN — used for the first start only; change it later under Settings → Machine | `192.168.1.100` |
 | `PORT` | Port of the app | `3001` |
 | `DB_PATH` | SQLite database file (created on first start) | `backend/data/xenia.db` |
 
 Open `http://<host>:<PORT>` in a browser. Health check: `/health`.
+
+As a systemd service, put `Environment=NODE_ENV=production` (and the other variables)
+into the unit, with `WorkingDirectory` set to `backend/` and
+`ExecStart=/usr/bin/node dist/backend/src/index.js`.
 
 The database uses WAL mode — back it up with `sqlite3 xenia.db ".backup backup.db"`,
 not by copying the file while the app runs.
