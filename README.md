@@ -81,6 +81,7 @@ cd backend && npm test
 
 ## Credits
 
+- Built together with [Claude Code](https://claude.com/claude-code) (Anthropic).
 - Brew-by-weight lag auto-calibration is adapted from
   [Beanconqueror](https://github.com/graphefruit/Beanconqueror) (GPL-3.0); see
   `shared/src/bbw-lag-calibration.ts`. Beanconqueror's brew-by-weight approach also
