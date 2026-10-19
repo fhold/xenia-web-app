@@ -149,6 +149,11 @@ export function validateScript(parsed: ParsedScript): ValidationResult {
         }
         if (a1 !== null && a1 <= 0) warnings.push(durationIssue("Cmd 4", a1));
         break;
+      case 26: // Wait for pressure: [pressure_mbar]
+        if (a0 !== null && (a0 < 0 || a0 > PRESSURE_MAX_MBAR)) {
+          warnings.push(rangeIssue("PRESSURE_RANGE", "Cmd 26 Warten bis Druck", a0, `0–${PRESSURE_MAX_MBAR} mbar`));
+        }
+        break;
       case 5: // Scale flow rate: [rate, duration_ms]
         if (a1 !== null && a1 <= 0) warnings.push(durationIssue("Cmd 5", a1));
         break;

@@ -23,13 +23,17 @@ import {
   Camera, ImageOff, ShoppingBag, ChevronUp, Archive,
 } from "lucide-react";
 import { useCoffees, type CoffeeView, type UseCoffeesReturn } from "../hooks/useCoffees.js";
+import { useBreakpoint } from "../hooks/useBreakpoint.js";
 import { resizeForUpload } from "../lib/imageResize.js";
+import { formatRoastDate } from "../lib/dates.js";
 import { CoffeeEditor } from "../components/CoffeeEditor.js";
 import { RoastingEditor } from "../components/RoastingEditor.js";
 import { RoastingActionSheet } from "../components/RoastingActionSheet.js";
 import { CoffeePicker } from "../components/CoffeePicker.js";
+import { CoffeeProfiles } from "../components/Network.js";
+import type { ShotFilters } from "../hooks/useShots.js";
 import { useTranslation } from "../i18n/index.js";
-import type { Bean, BeanRating, BestBrewSummary, Coffee } from "@shared/types.js";
+import type { Bean, BeanRating, BestBrewSummary, Coffee, Profile } from "@shared/types.js";
 import { activeSiblings, preferDeactivate } from "@shared/coffee.js";
 import theme, { alpha } from "../theme.js";
 
@@ -42,11 +46,10 @@ type SortKey = "recent" | "name" | "rating" | "age";
 type FilterKey = "all" | "active" | "favourite" | "available" | "archived";
 const RATING_ORDER: Record<string, number> = { thumbs_up: 3, meh: 2, thumbs_down: 1 };
 
+/** Röstdatum mit Jahr (lib/dates); ein ungültiges bleibt als Rohtext stehen. */
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat("de-DE", { day: "numeric", month: "short" }).format(d);
+  return formatRoastDate(iso) || iso;
 }
 const fmtG = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
@@ -89,7 +92,7 @@ function VerdictGlyph({ rating }: { rating: BeanRating | null }) {
 function AgeView({ days, frozen }: { days: number | null; frozen: boolean }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: MONO, fontSize: 15, color: C.txt, lineHeight: 1, whiteSpace: "nowrap" }}>
-      {days !== null ? <>{days}<small style={{ fontSize: 11, color: C.mut, marginLeft: 3, fontWeight: 400 }}>Tage</small></> : <span style={{ color: C.dim }}>—</span>}
+      {days !== null ? <>{days}<small style={{ fontSize: 11, color: C.mut, marginLeft: 3, fontWeight: 400 }}>Tage</small></> : <span style={{ color: C.mut }}>—</span>}
       {frozen && <span style={{ display: "inline-flex", color: C.blu }}><Snowflake size={13} /></span>}
     </div>
   );
@@ -568,11 +571,19 @@ function RoastingRow({ r, onOpenHistory, onKebab }: {
   // Negativer Rest = mehr bezogen als der Beutel hergibt (falsche Beutelgrösse
   // oder fehlende Korrektur) — das faellt in Mut-Grau nicht auf.
   const overdrawn = r.remainingG !== null && r.remainingG < 0;
-  const sub: { text: string; color?: string }[] = [];
-  if (!archived && r.effectiveAgeDays !== null) sub.push({ text: `${r.effectiveAgeDays} ${t("coffee.days")}` });
-  if (consumption) sub.push({ text: consumption, color: overdrawn ? C.red : undefined });
-  if (r.pricePerBagEur !== null) sub.push({ text: `${r.pricePerBagEur.toFixed(2)} €` });
-  if ((r.shotCount ?? 0) > 0) sub.push({ text: `${r.shotCount} ${t("coffee.bezuege")}` }); // SD-2
+  // Vorrat (Alter, Menge, Preis) und Verbrauch (Bezuege, eingefroren seit) —
+  // auf dem Handy zwei feste Zeilen, sonst bricht die Zeile mit „·“ vorne um.
+  const mobile = useBreakpoint() === "mobile";
+  const stock: { text: string; color?: string }[] = [];
+  if (!archived && r.effectiveAgeDays !== null) stock.push({ text: `${r.effectiveAgeDays} ${t("coffee.days")}` });
+  if (consumption) stock.push({ text: consumption, color: overdrawn ? C.red : undefined });
+  if (r.pricePerBagEur !== null) stock.push({ text: `${r.pricePerBagEur.toFixed(2)} €` });
+  const usage: { text: string; color?: string }[] = [];
+  if ((r.shotCount ?? 0) > 0) usage.push({ text: `${r.shotCount} ${t("coffee.bezuege")}` }); // SD-2
+  const dots = (list: { text: string; color?: string }[]) =>
+    list.map((s, i) => <span key={i}>{i > 0 ? "· " : ""}<span style={s.color ? { color: s.color } : undefined}>{s.text}</span></span>);
+  const frozenSince = frozen && r.frozenDate ? <span style={{ color: C.blu }}>❄ {t("coffee.frozenSince")} {fmtDate(r.frozenDate)}</span> : null;
+  const subLine: React.CSSProperties = { fontFamily: MONO, fontSize: 11.5, color: C.mut, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
   return (
     <div
       onClick={() => onOpenHistory(r.id)}
@@ -585,12 +596,15 @@ function RoastingRow({ r, onOpenHistory, onKebab }: {
           {t("coffee.roastedOn")} {fmtDate(r.roastDate)}{activeBadge}{statusBadge}
           {r.rating && <span style={{ fontFamily: "inherit", fontSize: 11, color: C.mut }}>{t("coffee.override")}</span>}
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={subLine}>
           {archived
             ? <span>{t("beans.status.archived")}{consumption ? " · " : ""}<span style={overdrawn ? { color: C.red } : undefined}>{consumption}</span></span>
-            : sub.map((s, i) => <span key={i}>{i > 0 ? "· " : ""}<span style={s.color ? { color: s.color } : undefined}>{s.text}</span></span>)}
-          {frozen && r.frozenDate && <span style={{ color: C.blu }}>❄ {t("coffee.frozenSince")} {fmtDate(r.frozenDate)}</span>}
+            : dots(mobile ? stock : [...stock, ...usage])}
+          {!mobile && frozenSince}
         </div>
+        {mobile && !archived && (usage.length > 0 || frozenSince) && (
+          <div style={{ ...subLine, marginTop: 4 }}>{dots(usage)}{frozenSince}</div>
+        )}
       </div>
       <button onClick={(e) => { e.stopPropagation(); onKebab(r); }} aria-label="Aktionen"
         style={{ width: 34, height: 42, borderRadius: 9, border: "1px solid transparent", background: "transparent", color: C.mut, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
@@ -832,10 +846,20 @@ interface BeansProps {
   /** Selected coffee id (controlled by the app so the detail survives a trip to
    *  the filtered History and back — SD-1). */
   selectedId: number | null;
+  /** Sorte oeffnen (neuer Eintrag im Verlauf) bzw. null: Detail schliessen, ohne Rueckweg (geloescht, zusammengefuehrt). */
   onSelectId: (id: number | null) => void;
+  /** „Zurück“ im Detail — dorthin, woher man kam (Liste, Editor, …). */
+  onBack: () => void;
+  /** Schnitt 4: „Mit diesen Profilen“ — Start mit der Roestung, Spruenge in Historie und Profil. */
+  network?: {
+    profiles: Profile[];
+    onStart: (profile: Profile, variantId: number, basketId: number | null, beanId: number | null) => void;
+    onOpenHistory: (filters: Partial<ShotFilters>) => void;
+    onOpenProfile: (profileId: number) => void;
+  };
 }
 
-export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectId }: BeansProps) {
+export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectId, onBack, network }: BeansProps) {
   const { t } = useTranslation();
   const api: UseCoffeesReturn = useCoffees();
   const { coffees, loading, error } = api;
@@ -967,7 +991,7 @@ export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectI
 
   const detail = selected && (
     <div>
-      <button onClick={() => onSelectId(null)}
+      <button onClick={onBack}
         style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: C.mut, cursor: "pointer", fontSize: 13, fontFamily: "inherit", marginBottom: 12, padding: 0 }}>
         <ChevronLeft size={16} />{t("coffee.back")}
       </button>
@@ -988,15 +1012,30 @@ export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectI
           />
         );
         const list = <RoastingList c={selected} onOpenHistory={(bid) => onOpenHistory(bid, selected.id)} onKebab={setSheet} onAddRoasting={() => setRoastingEditor({ coffee: selected })} />;
+        // Start mit der aktiven Roestung, sonst der juengsten nicht archivierten.
+        const startBean = selected.activeRoasting?.id ?? selected.roastings.find((r) => r.status !== "archived")?.id ?? null;
+        const net = network && (
+          <CoffeeProfiles
+            coffeeId={selected.id}
+            mobile={mobile}
+            profiles={network.profiles}
+            onStart={(p, variantId, basketId) => network.onStart(p, variantId, basketId, startBean)}
+            onOpenHistory={network.onOpenHistory}
+            onOpenProfile={network.onOpenProfile}
+          />
+        );
         return mobile
-          ? <>{head}<div style={{ height: 18 }} />{list}</>
+          ? <>{head}<div style={{ height: 18 }} />{list}{net}</>
           // 436 px + 22 gap sind die Werte aus dem Mockup. Mit 392 px brach ein
           // zweiteiliger Sortenname im Kopf um ("Nightingale / Espresso") —
           // bei "Deepwood" fiel das nicht auf.
-          : <div style={{ display: "flex", gap: 22, alignItems: "flex-start" }}>
-              <div style={{ flex: "0 0 436px" }}>{head}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>{list}</div>
-            </div>;
+          : <>
+              <div style={{ display: "flex", gap: 22, alignItems: "flex-start" }}>
+                <div style={{ flex: "0 0 436px" }}>{head}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>{list}</div>
+              </div>
+              {net}
+            </>;
       })()}
     </div>
   );

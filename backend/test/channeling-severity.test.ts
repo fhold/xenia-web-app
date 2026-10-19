@@ -20,7 +20,7 @@ import fs from "node:fs";
 process.env.DB_PATH = path.join(os.tmpdir(), `chan-test-${process.pid}-${Date.now()}.db`);
 
 const { initDb, getDb, closeDb } = await import("../src/db/index.js");
-const { migrateChannelingSeverity } = await import("../src/db/schema.js");
+const { migrateChannelingSeverity, migrateVsPrev } = await import("../src/db/schema.js");
 const { SqliteShotRepo } = await import("../src/db/shot-repo.js");
 
 const repo = new SqliteShotRepo();
@@ -70,11 +70,12 @@ function createSchema(): void {
         profile_set_temp_c      REAL,
         channeling              INTEGER NOT NULL DEFAULT 0,
         scale_frozen            INTEGER NOT NULL DEFAULT 0
-      , brew_steps TEXT, brew_def_hash TEXT, scale_lost INTEGER NOT NULL DEFAULT 0, bean_label TEXT);
+      , brew_steps TEXT, brew_def_hash TEXT, scale_lost INTEGER NOT NULL DEFAULT 0, bean_label TEXT,
+        variant_id INTEGER, basket_id INTEGER);
   `);
 }
 
-before(() => { initDb(); createSchema(); migrateChannelingSeverity(getDb()); });
+before(() => { initDb(); createSchema(); migrateChannelingSeverity(getDb()); migrateVsPrev(getDb()); });
 beforeEach(() => { getDb().exec("DELETE FROM shot;"); });
 after(() => {
   closeDb();

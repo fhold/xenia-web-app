@@ -1,5 +1,9 @@
 /**
- * ScriptCurveEditor — die Soll-Kurve eines Skripts, an der man ziehen kann.
+ * CurveEditor — die Soll-Kurve, an der man ziehen kann: fuer Skripte und, im
+ * vereinten Editor, genauso fuer App-Stufen (Schnitt 2d). Was ein Griff
+ * aendert, entscheidet ein kleiner Adapter (`CurveEdit`): beim Skript die
+ * Befehle (shared/script-edit.ts), bei der App genau eine Stufe
+ * (shared/steps-curve.ts). Gezeichnet wird beides aus derselben Timeline-Form.
  *
  * Eigenes SVG statt Recharts: Ziehen braucht die Achsen-Umrechnung in beide
  * Richtungen (Pixel ↔ ms/bar) und Pointer-Capture, und die Achsen muessen
@@ -15,18 +19,19 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { ParsedCmd } from "@shared/types.js";
+import type { BrewStep, ParsedCmd } from "@shared/types.js";
 import type { ScriptTimeline, PumpMode, ScriptPhase } from "@shared/script-timeline.js";
 import {
   setPhaseTarget, setPhaseRamp, shiftPhaseEnd, phaseWaitIndex, DRAG_TIME_STEP_MS,
 } from "@shared/script-edit.js";
+import { setStepPoint, shiftStepEnd, stepHasPoint, stepHasEnd } from "@shared/steps-curve.js";
 import theme from "../theme.js";
 
 const C = theme;
 const MONO = "'JetBrains Mono', monospace";
 const MODE_COLOR: Record<PumpMode, string> = { pressure: C.seriesPressure, flow: C.seriesFlow, power: C.seriesPower };
 
-const H = 300;
+const DEFAULT_H = 300;
 const PAD = { top: 22, bottom: 28, left: 34 };
 const BAR_MAX = 12;
 const FLOW_MAX = 8;
@@ -35,20 +40,78 @@ type Drag =
   | { kind: "point"; cmdIndex: number; axis: "bar" | "flow"; x0: number; y0: number; ramp0: number; target0: number }
   | { kind: "end"; cmdIndex: number; x0: number; end0: number };
 
-interface Props {
-  cmds: ParsedCmd[];
+/** Was die Griffe an einem Stand `T` aendern (Skript-Befehle oder App-Stufen). */
+export interface CurveEdit<T> {
+  /** ● Ziel und Rampe. */
+  canPoint: (value: T, key: number) => boolean;
+  /** ▮ Dauer. */
+  canEnd: (value: T, key: number) => boolean;
+  point: (base: T, key: number, axisValue: number, rampMs: number) => { next: T; text: string };
+  end: (base: T, key: number, deltaMs: number) => { next: T; text: string };
+}
+
+interface Props<T> {
+  value: T;
+  edit: CurveEdit<T>;
   timeline: ScriptTimeline;
+  /** Gewaehlte Phase: Befehlsindex (Skript) bzw. Stufenindex (App). */
   selected: number | null;
-  onSelect: (cmdIndex: number | null) => void;
+  onSelect: (key: number | null) => void;
   /** Laufende Aenderung beim Ziehen (noch nicht in der Rueckgaengig-Liste). */
-  onPreview: (cmds: ParsedCmd[]) => void;
+  onPreview: (value: T) => void;
   /** Ziehen beendet: diesen Stand festhalten. */
-  onCommit: (cmds: ParsedCmd[]) => void;
+  onCommit: (value: T) => void;
+  /** Hoehe in px (Standard 300) — der vereinte Editor braucht sie flacher. */
+  height?: number;
+  /** Oberkante der Fluss-Achse rechts (Standard 8). */
+  flowMax?: number;
+  /** Ende nur geschaetzt (App: am Yield) — „Ende ≈ …“. */
+  approxEnd?: boolean;
 }
 
 const fmt = (v: number, digits = 1) => v.toFixed(digits).replace(".", ",");
 
-export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPreview, onCommit }: Props) {
+/** Skript-Befehle: Ziel/Rampe am Pumpenbefehl, Dauer an der bestimmenden Wartezeit. */
+export const scriptCurveEdit: CurveEdit<ParsedCmd[]> = {
+  canPoint: (cmds, i) => { const c = cmds[i]; return !!c && (c.cmd === 3 || c.cmd === 4 || c.cmd === 5); },
+  canEnd: (cmds, i) => phaseWaitIndex(cmds, i) >= 0,
+  point: (base, i, target, rampMs) => {
+    let next = setPhaseTarget(base, i, target);
+    next = setPhaseRamp(next, i, rampMs, DRAG_TIME_STEP_MS);
+    const c = next[i]!;
+    const val = c.cmd === 4 ? `${fmt(Number(c.args[0]) / 1000)} bar` : c.cmd === 3 ? `${c.args[0]} %` : `${fmt(Number(c.args[0]))} ml/s`;
+    return { next, text: `${val} · Rampe ${fmt(Number(c.args[1]) / 1000)} s` };
+  },
+  end: (base, i, deltaMs) => {
+    const next = shiftPhaseEnd(base, i, deltaMs, DRAG_TIME_STEP_MS);
+    const w = phaseWaitIndex(next, i);
+    return { next, text: `Warten ${fmt(Number(next[w]!.args[0]) / 1000)} s` };
+  },
+};
+
+/** App-Stufen: Ziel/Rampe und Zeit-Ausstieg genau einer Stufe. */
+export const stepsCurveEdit: CurveEdit<BrewStep[]> = {
+  canPoint: (steps, i) => !!steps[i] && stepHasPoint(steps[i]!),
+  canEnd: (steps, i) => stepHasEnd(steps, i),
+  point: (base, i, target, rampMs) => {
+    const next = setStepPoint(base, i, target, rampMs, DRAG_TIME_STEP_MS);
+    const s = next[i]!;
+    const val = s.kind === "pressure" ? `${fmt(s.targetPressureBar)} bar` : s.kind === "flow" ? `${fmt(s.targetFlowGs)} g/s` : s.kind === "power" ? `${s.power} %` : "";
+    return { next, text: `${val} · Rampe ${fmt((s.rampMs ?? 0) / 1000)} s` };
+  },
+  end: (base, i, deltaMs) => {
+    const next = shiftStepEnd(base, i, deltaMs, DRAG_TIME_STEP_MS);
+    return { next, text: `nach ${fmt(next[i]!.exit.seconds ?? 0)} s` };
+  },
+};
+
+/** Die Skript-Kurve (Skript-Varianten im Profil-Editor). */
+export function ScriptCurveEditor({ cmds, ...rest }: Omit<Props<ParsedCmd[]>, "value" | "edit"> & { cmds: ParsedCmd[] }) {
+  return <CurveEditor value={cmds} edit={scriptCurveEdit} {...rest} />;
+}
+
+export function CurveEditor<T>({ value, edit, timeline, selected, onSelect, onPreview, onCommit, height = DEFAULT_H, flowMax = FLOW_MAX, approxEnd = false }: Props<T>) {
+  const H = height;
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   useEffect(() => {
@@ -60,8 +123,8 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
   }, []);
 
   const [drag, setDrag] = useState<Drag | null>(null);
-  const baseRef = useRef<ParsedCmd[] | null>(null);
-  const lastRef = useRef<ParsedCmd[] | null>(null);
+  const baseRef = useRef<T | null>(null);
+  const lastRef = useRef<T | null>(null);
   const [bubble, setBubble] = useState<{ x: number; y: number; text: string } | null>(null);
 
   // Achsen: waehrend des Ziehens eingefroren.
@@ -74,7 +137,7 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
   const plotH = H - PAD.top - PAD.bottom;
   const x = (ms: number) => PAD.left + (ms / xMax) * plotW;
   const yBar = (v: number) => PAD.top + plotH - (v / BAR_MAX) * plotH;
-  const yFlow = (v: number) => PAD.top + plotH - (v / FLOW_MAX) * plotH;
+  const yFlow = (v: number) => PAD.top + plotH - (v / flowMax) * plotH;
   const y = (axis: "bar" | "flow", v: number) => (axis === "flow" ? yFlow(v) : yBar(v));
   const msPerPx = xMax / plotW;
 
@@ -86,8 +149,8 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
     e.preventDefault();
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    baseRef.current = cmds;
-    lastRef.current = cmds;
+    baseRef.current = value;
+    lastRef.current = value;
     setFrozenXMax(xMax);
     setDrag(d);
     onSelect(d.cmdIndex);
@@ -97,21 +160,15 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
     if (!drag || !baseRef.current) return;
     const base = baseRef.current;
     const dxMs = (e.clientX - drag.x0) * msPerPx;
-    let next: ParsedCmd[];
-    let text: string;
+    let r: { next: T; text: string };
     if (drag.kind === "point") {
-      const unitsPerPx = (drag.axis === "flow" ? FLOW_MAX : BAR_MAX) / plotH;
+      const unitsPerPx = (drag.axis === "flow" ? flowMax : BAR_MAX) / plotH;
       const target = drag.target0 - (e.clientY - drag.y0) * unitsPerPx;
-      next = setPhaseTarget(base, drag.cmdIndex, target);
-      next = setPhaseRamp(next, drag.cmdIndex, drag.ramp0 + dxMs, DRAG_TIME_STEP_MS);
-      const c = next[drag.cmdIndex]!;
-      const val = c.cmd === 4 ? `${fmt(Number(c.args[0]) / 1000)} bar` : c.cmd === 3 ? `${c.args[0]} %` : `${fmt(Number(c.args[0]))} ml/s`;
-      text = `${val} · Übergang ${fmt(Number(c.args[1]) / 1000)} s`;
+      r = edit.point(base, drag.cmdIndex, target, drag.ramp0 + dxMs);
     } else {
-      next = shiftPhaseEnd(base, drag.cmdIndex, dxMs, DRAG_TIME_STEP_MS);
-      const w = phaseWaitIndex(next, drag.cmdIndex);
-      text = `Warten ${fmt(Number(next[w]!.args[0]) / 1000)} s`;
+      r = edit.end(base, drag.cmdIndex, dxMs);
     }
+    const { next, text } = r;
     lastRef.current = next;
     onPreview(next);
     const rect = (e.currentTarget as Element).closest("svg")!.getBoundingClientRect();
@@ -146,6 +203,9 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
     }
     return pts.map(([t, v], i) => `${i ? "L" : "M"}${x(t).toFixed(1)},${y(ph.axis, v).toFixed(1)}`).join(" ");
   };
+  /** Nur das Halten ab Rampenende (die Rampe davor ist angedeutet). */
+  const holdPath = (ph: ScriptPhase) =>
+    `M${x(ph.rampEndT).toFixed(1)},${y(ph.axis, ph.targetValue).toFixed(1)} L${x(ph.tEnd).toFixed(1)},${y(ph.axis, ph.targetValue).toFixed(1)}`;
 
   return (
     <div ref={wrapRef} style={{ position: "relative", width: "100%", userSelect: "none" }}>
@@ -165,9 +225,10 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
             <text x={PAD.left - 6} y={yBar(v) + 3} fill={C.mut} fontSize={10} fontFamily={MONO} textAnchor="end">{v}</text>
           </g>
         ))}
-        {hasFlow && [0, 2, 4, 6, 8].map((v) => (
-          <text key={`gf${v}`} x={width - padRight + 6} y={yFlow(v) + 3} fill={C.blu} fontSize={10} fontFamily={MONO}>{v}</text>
+        {hasFlow && flowTicks(flowMax).map((v) => (
+          <text key={`gf${v}`} x={width - padRight + 6} y={yFlow(v) + 3} fill={C.blu} fontSize={10} fontFamily={MONO}>{String(v).replace(".", ",")}</text>
         ))}
+        {hasFlow && <text x={width - padRight + 6} y={PAD.top - 9} fill={C.blu} fontSize={9} fontFamily={MONO}>g/s</text>}
         {xTicks.map((t) => (
           <text key={`gx${t}`} x={x(t)} y={H - 8} fill={C.mut} fontSize={10} fontFamily={MONO} textAnchor="middle">{Math.round(t / 1000)}s</text>
         ))}
@@ -200,17 +261,24 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
           </g>
         ))}
         <line x1={x(timeline.totalMs)} x2={x(timeline.totalMs)} y1={PAD.top} y2={PAD.top + plotH} stroke={C.bdr3} strokeDasharray="2 3" />
-        <text x={x(timeline.totalMs) - 4} y={PAD.top + 10} fill={C.mut} fontSize={9} textAnchor="end">Ende {Math.round(timeline.totalMs / 1000)} s</text>
+        <text x={x(timeline.totalMs) - 4} y={PAD.top + 10} fill={C.mut} fontSize={9} textAnchor="end">Ende {approxEnd ? "≈ " : ""}{Math.round(timeline.totalMs / 1000)} s</text>
 
-        {/* Kurve */}
-        {live.map((ph) => (
-          <path key={`p${ph.cmdIndex}`} d={phasePath(ph)} fill="none" stroke={MODE_COLOR[ph.mode]}
-            strokeWidth={selected === ph.cmdIndex ? 3.5 : 2.5} strokeLinejoin="round" pointerEvents="none" />
+        {/* Kurve — Preinfusion hat keinen Sollwert (nur die Flaeche); ein Rampenstart am
+            Ist-Fluss ist nur angedeutet: gestrichelt, und nie ab Null. */}
+        {live.filter((ph) => !ph.noTarget).map((ph) => (
+          <g key={`p${ph.cmdIndex}`} pointerEvents="none">
+            {ph.startEstimated && (
+              <line x1={x(ph.tStart)} y1={y(ph.axis, ph.startValue)} x2={x(ph.rampEndT)} y2={y(ph.axis, ph.targetValue)}
+                stroke={MODE_COLOR[ph.mode]} strokeWidth={2} strokeDasharray="4 4" strokeOpacity={0.7} />
+            )}
+            <path d={ph.startEstimated ? holdPath(ph) : phasePath(ph)} fill="none" stroke={MODE_COLOR[ph.mode]}
+              strokeWidth={selected === ph.cmdIndex ? 3.5 : 2.5} strokeLinejoin="round" />
+          </g>
         ))}
 
         {/* Griff: Stufenende */}
         {live.map((ph) => {
-          if (phaseWaitIndex(cmds, ph.cmdIndex) < 0) return null;
+          if (!edit.canEnd(value, ph.cmdIndex)) return null;
           const gx = x(ph.tEnd);
           const active = drag?.kind === "end" && drag.cmdIndex === ph.cmdIndex;
           return (
@@ -226,8 +294,7 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
 
         {/* Griff: Rampenende / Zielwert */}
         {live.map((ph) => {
-          const c = cmds[ph.cmdIndex];
-          if (!c || !(c.cmd === 3 || c.cmd === 4 || c.cmd === 5)) return null;
+          if (!edit.canPoint(value, ph.cmdIndex)) return null;
           const hx = x(ph.tStart + ph.rampDurMs);
           const hy = y(ph.axis, ph.targetValue);
           const active = drag?.kind === "point" && drag.cmdIndex === ph.cmdIndex;
@@ -260,4 +327,12 @@ export function ScriptCurveEditor({ cmds, timeline, selected, onSelect, onPrevie
       )}
     </div>
   );
+}
+
+/** Beschriftung der Fluss-Achse: 0,5er-Schritte bis 3 g/s, darueber ganze bzw. 2er. */
+function flowTicks(max: number): number[] {
+  const step = max <= 3 ? 0.5 : max <= 6 ? 1 : 2;
+  const out: number[] = [];
+  for (let v = 0; v <= max + 1e-9; v += step) out.push(Math.round(v * 10) / 10);
+  return out;
 }

@@ -1,21 +1,30 @@
 /**
- * Profiles view — Phase 1 Step 4b.
+ * Profiles view — eine Liste: Favoriten farbig abgesetzt oben, dann die
+ * übrigen Profile, Wartungsprofile unten hinter einem Trenner, ganz am Ende
+ * Skripte an der Maschine, die kein Profil benutzt.
  *
- * Shows all profiles with 1×/2× execute buttons, edit, and delete.
- * The ProfileEditor modal handles create and edit.
- *
- * Top section: favorites with ▲▼ reorder buttons (2+ favorites) — changes
- * persist immediately via POST /api/profiles/favorites/order.
+ * Sortieren per Ziehen am Griff (Pointer statt HTML5-Drag-and-Drop, das auf dem
+ * Tablet nicht geht — dasselbe Muster wie die Befehlsliste im Skript-Editor).
+ * Gespeichert wird die ganze Reihenfolge über POST /api/profiles/order; die
+ * Reihenfolge der Favoriten ist die der Dashboard-Chips.
  */
 
-import { useEffect, useState } from "react";
-import { Pencil, Trash2, Plus, RefreshCw, ChevronUp, ChevronDown, FileText, ScrollText, Star, Copy, Download, MoreHorizontal } from "lucide-react";
-import type { Profile, ProfileCreate, XeniaScript, ShotSize } from "@shared/types.js";
+import { useEffect, useRef, useState } from "react";
+import { Pencil, Trash2, Plus, RefreshCw, Star, Copy, Download, MoreHorizontal, History as HistoryIcon, GripVertical, FlaskConical } from "lucide-react";
+import type { Basket, Profile, ProfileCreate, ProfileVariant, XeniaScript } from "@shared/types.js";
+import { effectiveCategory } from "@shared/bbw-arming.js";
+import { startVariants, variantInputs, variantRunsInApp } from "@shared/profile-slots.js";
 import type { UseProfilesReturn } from "../hooks/useProfiles.js";
-import { ProfileEditor } from "../components/ProfileEditor.js";
+import { ProfileEditorView } from "../components/ProfileEditorView.js";
+import type { UseScriptsReturn } from "../hooks/useScripts.js";
+import { ProfileSparkline } from "../components/ProfileSparkline.js";
+import { useBaskets } from "../hooks/useBaskets.js";
+import type { ShotFilters } from "../hooks/useShots.js";
+import { Modal, modalTitle, modalText } from "../components/ScriptInsertMenu.js";
 
 import theme, { alpha } from '../theme';
 const C = theme;
+const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
 
 const LABEL: React.CSSProperties = {
   fontSize: 10,
@@ -23,13 +32,14 @@ const LABEL: React.CSSProperties = {
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 1.5,
-  marginBottom: 10,
 };
 
-/** The editable content of a profile — shared by "duplizieren" and JSON export. */
+/** The editable content of a profile — for "duplizieren". Die Kopie bleibt Versuch, wenn das Original einer ist. */
 function profilePayload(p: Profile): ProfileCreate {
   return {
     name: p.name,
+    kind: p.kind,
+    isTrial: p.isTrial,
     scriptIdSingle: p.scriptIdSingle,
     scriptIdDouble: p.scriptIdDouble,
     yieldTargetSingleG: p.yieldTargetSingleG,
@@ -41,9 +51,36 @@ function profilePayload(p: Profile): ProfileCreate {
   };
 }
 
-function exportProfile(p: Profile): void {
+/**
+ * JSON-Export v2 (Schnitt 3e): Varianten mit Sieb (Name + Typ), Yield und
+ * Kurve — Skripte mit Titel und Inhalt, nicht nur ihrer Nummer. So bleibt die
+ * Datei ohne diese Datenbank und diese Maschine lesbar.
+ */
+function exportProfile(p: Profile, scripts: XeniaScript[], baskets: Basket[]): void {
+  const list = startVariants(p);
+  const profile = {
+    name: p.name,
+    kind: p.kind,
+    isTrial: p.isTrial,
+    targetTempC: p.targetTempC,
+    notes: p.notes,
+    variants: list.map((v) => {
+      const basket = baskets.find((b) => b.id === v.defaultBasketId);
+      const script = v.scriptId !== null ? scripts.find((s) => s.id === v.scriptId) : undefined;
+      return {
+        name: v.name,
+        basket: basket ? { name: basket.name, type: basket.type } : null,
+        yieldG: v.yieldG,
+        // „wie Variante X“ — per Name, IDs gelten nur in dieser Datenbank.
+        sameAs: v.sameAsId !== null ? (list.find((x) => x.id === v.sameAsId)?.name ?? null) : null,
+        script: script ? { title: script.title, content: script.content } : null,
+        phaseNames: v.phaseNames,
+        brewSteps: v.brewSteps,
+      };
+    }),
+  };
   const blob = new Blob(
-    [JSON.stringify({ kind: "xenia-profile", version: 1, profile: profilePayload(p) }, null, 2)],
+    [JSON.stringify({ kind: "xenia-profile", version: 2, profile }, null, 2)],
     { type: "application/json" },
   );
   const url = URL.createObjectURL(blob);
@@ -54,29 +91,39 @@ function exportProfile(p: Profile): void {
   URL.revokeObjectURL(url);
 }
 
+const fmtG = (g: number) => (Number.isInteger(g) ? String(g) : g.toFixed(1)).replace(".", ",");
+
 interface ProfilesProps {
   profiles: Profile[];
   scripts: XeniaScript[];
   profileActions: Pick<UseProfilesReturn,
-    "createProfile" | "updateProfile" | "deleteProfile" | "reorderFavorites">;
-  onExecute: (profile: Profile, shotSize: ShotSize) => void;
-  /** Start a flow-hold drive for a profile that carries a step sequence
-   *  (brewSteps). Wired to the 1×/2× buttons for flow profiles. */
-  onExecuteDrive?: (profile: Profile, shotSize: ShotSize) => void;
+    "createProfile" | "updateProfile" | "deleteProfile" | "reorderProfiles">;
+  /** Start einer Variante (null = die erste) — oeffnet „Bezug vorbereiten“. */
+  onExecute: (profile: Profile, variantId: number | null) => void;
+  /** Start a flow-hold drive for a variant that runs in the app (step sequence). */
+  onExecuteDrive?: (profile: Profile, variantId: number | null) => void;
   /** Whether a new shot may be started right now (machine ready + no active
-   *  shot). Same readiness logic as the Dashboard chips (shared helper). When
-   *  false, the 1×/2× start buttons are disabled. */
+   *  shot). Same readiness logic as the Dashboard chips (shared helper). */
   canStartShot?: boolean;
   /** Klick auf einen gesperrten Start — die App sagt, WARUM gesperrt ist. */
   onBlockedStart?: () => void;
   mobile?: boolean;
   scriptsSyncing?: boolean;
   onEditorOpen?: () => void;
-  /** SE-2b: open the script viewer — general list (no arg) or a script's detail. */
-  onOpenScript?: (scriptId?: number) => void;
-  /** Sprung aus der History-Detailansicht: dieses Profil gleich im Editor oeffnen. */
-  initialProfileId?: number | null;
-  onInitialApplied?: () => void;
+  /** „Alle Bezüge“: die Historie, gefiltert auf dieses Profil. */
+  onOpenHistory?: (profileId: number) => void;
+  /** Ein Skript ohne Profil an der Maschine löschen. */
+  onDeleteScript?: (scriptId: number) => Promise<void>;
+  /** Schnitt 4, Reiter „Lief mit“: Historie mit Filtern, Sorte oeffnen. */
+  onOpenHistoryWith?: (filters: Partial<ShotFilters>) => void;
+  onOpenCoffee?: (coffeeId: number) => void;
+  /** Skripte an der Maschine anlegen/ueberschreiben/loeschen — fuer den vereinten Editor. */
+  scriptActions: Pick<UseScriptsReturn, "createScript" | "updateScript" | "deleteScript">;
+  /** Offener Editor (Profil-Id, neues Profil oder keiner) — steht im Verlauf der App. */
+  editorId?: number | "new" | null;
+  onOpenEditor: (id: number | "new") => void;
+  /** Editor zu (Zurueck, Verwerfen, nach dem Speichern) — fuehrt dorthin, woher er kam. */
+  onCloseEditor: () => void;
 }
 
 /** Ein Eintrag im Zeilen-Menü. Bewusst lokal: der einzige andere Ort mit
@@ -104,6 +151,9 @@ function RowMenuItem({ icon, label, danger, onClick }: {
   );
 }
 
+type Group = "fav" | "norm" | "test";
+interface DragState { group: Group; from: number; to: number; pointerId: number; mids: number[] }
+
 export function Profiles({
   profiles,
   scripts,
@@ -115,274 +165,385 @@ export function Profiles({
   mobile = false,
   scriptsSyncing,
   onEditorOpen,
-  onOpenScript,
-  initialProfileId = null,
-  onInitialApplied,
+  onOpenHistory,
+  onDeleteScript,
+  onOpenHistoryWith,
+  onOpenCoffee,
+  scriptActions,
+  editorId = null,
+  onOpenEditor,
+  onCloseEditor,
 }: ProfilesProps) {
+  // Vereinter Editor (volle Ansicht). Welcher offen ist, sagt der Verlauf der
+  // App (`editorId`); hier liegt der Stand des Profils beim Oeffnen — ein
+  // spaeteres Nachladen der Liste setzt den Editor nicht zurueck. Ein gerade
+  // angelegtes Profil oeffnet, sobald es in der Liste steht.
   const [editorProfile, setEditorProfile] = useState<Profile | null | "new">(null);
-  // Sprung aus der History: Editor fuer dieses Profil oeffnen, sobald die Liste
-  // da ist. Gibt es das Profil nicht (mehr), den Sprung trotzdem verbrauchen.
   useEffect(() => {
-    if (initialProfileId === null || profiles.length === 0) return;
-    const p = profiles.find((x) => x.id === initialProfileId);
-    if (p) { setEditorProfile(p); onEditorOpen?.(); }
-    onInitialApplied?.();
-  }, [initialProfileId, profiles]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
+    if (editorId === null) { setEditorProfile(null); return; }
+    if (editorId === "new") { setEditorProfile("new"); return; }
+    setEditorProfile((cur) => (cur !== null && cur !== "new" && cur.id === editorId)
+      ? cur
+      : (profiles.find((x) => x.id === editorId) ?? null));
+  }, [editorId, profiles]);
+  // Beim Oeffnen gleicht der Editor die Skripte der Maschine ab.
+  const openedFor = useRef<number | "new" | null>(null);
+  useEffect(() => {
+    if (editorId !== null && editorId !== openedFor.current) onEditorOpen?.();
+    openedFor.current = editorId;
+  }, [editorId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [busyId, setBusyId] = useState<number | null>(null);
   /** Offenes Zeilen-Menue (Profil-Id) — immer nur eines. */
   const [menuId, setMenuId] = useState<number | null>(null);
+  /** Profil loeschen: Rueckfrage, welche seiner Skripte an der Maschine mit weg sollen (keins vorgewaehlt). */
+  const [deleting, setDeleting] = useState<{ profile: Profile; own: XeniaScript[]; pick: Set<number> } | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
-  const [reordering, setReordering] = useState(false);
 
-  // UP-9: ONE list — favorites first (by favoriteOrder), then the rest in their
-  // existing order. No separate favorites section / no duplicated rows.
-  const favorites = [...profiles.filter((p) => p.isFavorite)].sort((a, b) => {
-    const ao = a.favoriteOrder ?? Infinity;
-    const bo = b.favoriteOrder ?? Infinity;
-    if (ao !== bo) return ao - bo;
-    return a.name.localeCompare(b.name);
-  });
-  const nonFavorites = profiles.filter((p) => !p.isFavorite);
-  const ordered = [...favorites, ...nonFavorites];
+  // Gezogene Reihenfolge gilt sofort, bis die Liste vom Server zurueckkommt.
+  const [localOrder, setLocalOrder] = useState<number[] | null>(null);
+  useEffect(() => { setLocalOrder(null); }, [profiles]);
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const rowRefs = useRef(new Map<number, HTMLDivElement>());
 
-  async function handleDelete(id: number) {
-    setDeletingId(id);
+  const { baskets } = useBaskets();
+  const scriptById = new Map(scripts.map((s) => [s.id, s]));
+  const isMaintenance = (p: Profile): boolean => p.kind === "maintenance";
+
+  const ordered = localOrder
+    ? [...profiles].sort((a, b) => localOrder.indexOf(a.id) - localOrder.indexOf(b.id))
+    : profiles;
+  // Messlauf-Profile stehen in einer eigenen Gruppe ganz unten, auch als Favorit.
+  const isTest = (p: Profile): boolean => p.kind === "test";
+  const favorites = ordered.filter((p) => p.isFavorite && !isTest(p));
+  const others = ordered.filter((p) => !p.isFavorite && !isMaintenance(p) && !isTest(p));
+  const maintenance = ordered.filter((p) => !p.isFavorite && isMaintenance(p));
+  const tests = ordered.filter(isTest);
+  const groupIds: Record<Group, number[]> = { fav: favorites.map((p) => p.id), norm: others.map((p) => p.id), test: tests.map((p) => p.id) };
+
+  // Skripte an der Maschine, die kein Profil benutzt (die Liste kennt nur
+  // nicht verwaiste Skripte — geloeschte bleiben fuer die Historie in der DB).
+  const used = new Set<number>();
+  for (const p of profiles) {
+    if (p.scriptIdSingle !== null) used.add(p.scriptIdSingle);
+    if (p.scriptIdDouble !== null) used.add(p.scriptIdDouble);
+    for (const v of p.variants ?? []) if (v.scriptId !== null) used.add(v.scriptId);
+  }
+  const loose = scripts.filter((s) => !used.has(s.id));
+
+  async function run(id: number | null, fn: () => Promise<unknown>) {
+    setBusyId(id);
     setRowError(null);
     try {
-      await profileActions.deleteProfile(id);
+      await fn();
     } catch (err) {
       setRowError(err instanceof Error ? err.message : String(err));
     } finally {
-      setDeletingId(null);
+      setBusyId(null);
     }
   }
 
   // A copy is never a favourite — it would land in the ordered favourites list
   // next to its original without the user asking for it.
-  async function handleDuplicate(p: Profile) {
-    setDuplicatingId(p.id);
-    setRowError(null);
-    try {
-      await profileActions.createProfile({
-        ...profilePayload(p),
-        name: `${p.name} (Kopie)`,
-        isFavorite: false,
-      });
-    } catch (err) {
-      setRowError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDuplicatingId(null);
-    }
-  }
+  // Die Kopie bekommt die Varianten als neue (ohne IDs).
+  const duplicate = (p: Profile) => run(p.id, () =>
+    profileActions.createProfile({
+      ...profilePayload(p), name: `${p.name} (Kopie)`, isFavorite: false,
+      variants: variantInputs(p).map((v) => ({ ...v, id: null })),
+    }));
 
-  async function handleMove(index: number, direction: "up" | "down") {
-    const swapIndex = direction === "up" ? index - 1 : index + 1;
-    if (swapIndex < 0 || swapIndex >= favorites.length) return;
-    const newOrder = favorites.map((p) => p.id);
-    [newOrder[index], newOrder[swapIndex]] = [newOrder[swapIndex], newOrder[index]];
-    setReordering(true);
-    try {
-      await profileActions.reorderFavorites(newOrder);
-    } finally {
-      setReordering(false);
-    }
-  }
-
-  const rowPad = mobile ? "10px 12px" : "10px 16px";
-
-  // Shared icon-button style; accepts an optional color override.
-  const iconBtn = (color: string = C.mut, disabled = false): React.CSSProperties => ({
-    background: "transparent",
-    border: `1px solid ${disabled ? C.bdr : C.bdr}`,
-    color: disabled ? C.dim : color,
-    borderRadius: 6,
-    padding: "5px 7px",
-    cursor: disabled ? "not-allowed" : "pointer",
-    display: "flex",
-    opacity: disabled ? 0.35 : 1,
-    flexShrink: 0,
+  // Die Art schlaegt die Kategorie des Skripts vor (Uebersteuerung vor Automatik).
+  const adoptScript = (s: XeniaScript) => run(null, async () => {
+    const created = await profileActions.createProfile({
+      name: s.title, scriptIdSingle: s.id, scriptIdDouble: null,
+      kind: effectiveCategory({ categoryAuto: s.categoryAuto, categoryOverride: s.categoryOverride }) === "maintenance" ? "maintenance" : "brew",
+      yieldTargetSingleG: null, yieldTargetDoubleG: null, isFavorite: false,
+    });
+    onOpenEditor(created.id);
   });
 
-  // Start 1×/2× — der haeufigste Griff in dieser Liste, deshalb gross genug
-  // fuer den Finger. Drei Zustaende: startbereit; gesperrt, weil die Maschine
-  // gerade nicht kann (bleibt lesbar und anklickbar, der Klick sagt warum);
-  // nicht vorhanden (kein 2×-Platz, fehlende Verdrahtung) — blass.
-  const startBtn = (state: "ready" | "blocked" | "none"): React.CSSProperties => ({
-    minWidth: 48,
-    height: 36,
-    padding: "0 12px",
-    borderRadius: 8,
-    fontSize: 13,
-    fontWeight: 700,
-    fontFamily: "inherit",
-    background: state === "ready" ? C.accG : "transparent",
-    border: `1px solid ${state === "ready" ? `${C.acc}30` : state === "blocked" ? C.bdr2 : C.bdr}`,
-    color: state === "ready" ? C.acc : state === "blocked" ? C.mut : C.dim,
-    opacity: state === "none" ? 0.4 : 1,
-    cursor: state === "none" ? "not-allowed" : "pointer",
-  });
+  // Nur Skripte, die kein anderes Profil faehrt, stehen zur Wahl — und nur, wenn sie an der Maschine sind.
+  const askDelete = (p: Profile) => {
+    const mine = new Set((p.variants ?? []).map((v) => v.scriptId).filter((id): id is number => id !== null));
+    const others = new Set(profiles.filter((x) => x.id !== p.id).flatMap((x) => (x.variants ?? []).map((v) => v.scriptId)));
+    const own = scripts.filter((s) => mine.has(s.id) && !others.has(s.id));
+    setDeleting({ profile: p, own: onDeleteScript ? own : [], pick: new Set() });
+  };
+  const confirmDelete = () => {
+    if (!deleting) return;
+    const { profile: p, pick } = deleting;
+    setDeleting(null);
+    void run(p.id, async () => {
+      await profileActions.deleteProfile(p.id);
+      for (const id of pick) await onDeleteScript!(id);
+    });
+  };
 
-  function ProfileRow({ p, fav = false, favIndex = 0, favTotal = 0 }: {
-    p: Profile;
-    fav?: boolean;
-    favIndex?: number;
-    favTotal?: number;
-  }) {
-    const isFlow = p.brewSteps != null;
-    // A 2× slot exists for a script profile via scriptIdDouble, for a flow
-    // profile via its own yield_double (mirrors the script model).
-    const hasDouble = isFlow ? p.yieldTargetDoubleG !== null : p.scriptIdDouble !== null;
-    const isDeleting = deletingId === p.id;
-    // Same readiness/active-shot guard as the Dashboard chips (shared helper).
-    // A flow profile also needs the drive handler wired.
-    // Zwei Sperrgruende, die sich verschieden verhalten muessen: fehlende
-    // Verdrahtung (bleibt tot) und "Maschine/Bezug noch nicht so weit" — der
-    // muss anklickbar bleiben, sonst passiert auf dem Tablet gar nichts und es
-    // sieht aus wie ein Absturz (kein Hover, also auch kein title).
-    const wiringMissing = isFlow && !onExecuteDrive;
-    const startDisabled = !canStartShot || wiringMissing;
-    const singleDisabled = startDisabled;
-    const doubleDisabled = !hasDouble || startDisabled;
-    const tapStart = (size: "single" | "double") => {
-      if (wiringMissing) return;
-      if (!canStartShot) { onBlockedStart?.(); return; }
-      start(size);
-    };
-    const notReadyTitle = "Maschine nicht bereit oder Bezug läuft";
-    // Route the start to the flow-hold drive or the script execute.
-    const start = (size: ShotSize) => {
-      if (isFlow) onExecuteDrive?.(p, size);
-      else onExecute(p, size);
-    };
+  const deleteScript = (s: XeniaScript) => {
+    if (!onDeleteScript) return;
+    if (!window.confirm(`Skript #${s.id} „${s.title}“ an der Maschine löschen? Das lässt sich nicht rückgängig machen.`)) return;
+    void run(null, () => onDeleteScript(s.id));
+  };
 
+  // --- Ziehen -----------------------------------------------------------------
+
+  const startDrag = (e: React.PointerEvent, group: Group, index: number) => {
+    e.preventDefault();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    const mids = groupIds[group].map((id) => {
+      const r = rowRefs.current.get(id)?.getBoundingClientRect();
+      return r ? r.top + r.height / 2 : 0;
+    });
+    setDrag({ group, from: index, to: index, pointerId: e.pointerId, mids });
+    setMenuId(null);
+  };
+  const moveDrag = (e: React.PointerEvent) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    // Zielplatz = Zahl der anderen Zeilen, deren Mitte ueber dem Zeiger liegt.
+    const to = drag.mids.filter((m, i) => i !== drag.from && m < e.clientY).length;
+    if (to !== drag.to) setDrag({ ...drag, to });
+  };
+  const endDrag = () => {
+    if (!drag) return;
+    const { group, from, to } = drag;
+    setDrag(null);
+    if (to === from) return;
+    const ids = [...groupIds[group]];
+    const [moved] = ids.splice(from, 1);
+    ids.splice(to, 0, moved!);
+    const fav = group === "fav" ? ids : groupIds.fav;
+    const norm = group === "norm" ? ids : groupIds.norm;
+    const test = group === "test" ? ids : groupIds.test;
+    const full = [...fav, ...norm, ...maintenance.map((p) => p.id), ...test];
+    setLocalOrder(full);
+    void run(null, async () => {
+      try {
+        await profileActions.reorderProfiles(full);
+      } catch (err) {
+        setLocalOrder(null);
+        throw err;
+      }
+    });
+  };
+
+  // --- Bausteine --------------------------------------------------------------
+
+  const iconBtn: React.CSSProperties = {
+    width: 36, height: 36, flexShrink: 0, borderRadius: 9, border: `1px solid ${C.bdrL}`,
+    background: "transparent", color: C.mut, cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "center",
+  };
+
+  // Start je Variante. Zwei Zustaende: startbereit; gesperrt, weil die Maschine
+  // gerade nicht kann — bleibt lesbar und anklickbar, der Klick sagt warum.
+  const startButton = (key: string, label: string, yieldG: number | null, onTap: () => void, warm = false) => {
+    const ready = canStartShot;
     return (
-      <div
+      <button
+        key={key}
+        onClick={() => { if (ready) onTap(); else onBlockedStart?.(); }}
+        title={ready ? undefined : "Maschine nicht bereit oder Bezug läuft"}
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: rowPad,
-          // Favourites carry the accent tint + star so they read as favourites
-          // without having to spot the reorder arrows.
-          background: p.isFavorite ? C.accG : C.card,
-          borderRadius: 10,
-          border: `1px solid ${p.isFavorite ? C.accB : C.bdr}`,
-          marginBottom: 4,
+          // Handy: so breit wie die Variante es braucht („Doppel“ nie „Dop…“) — gekuerzt wird der Profilname.
+          ...(mobile ? { minWidth: 64, maxWidth: 120, padding: "0 4px" } : { width: 94 }), height: 42, boxSizing: "border-box", flexShrink: 0,
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1,
+          borderRadius: 10, border: `1px solid ${ready ? C.bdr2 : C.bdr}`,
+          background: ready ? C.sunken : "transparent", cursor: "pointer", fontFamily: "inherit",
         }}
       >
-        {/* ▲▼ reorder buttons — only in the favorites section, only when ≥2 favs */}
-        {fav && favTotal >= 2 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 1, flexShrink: 0 }}>
-            <button
-              onClick={() => { void handleMove(favIndex, "up"); }}
-              disabled={favIndex === 0 || reordering}
-              title="Nach oben"
-              style={iconBtn(C.mut, favIndex === 0 || reordering)}
-            >
-              <ChevronUp size={12} />
-            </button>
-            <button
-              onClick={() => { void handleMove(favIndex, "down"); }}
-              disabled={favIndex === favTotal - 1 || reordering}
-              title="Nach unten"
-              style={iconBtn(C.mut, favIndex === favTotal - 1 || reordering)}
-            >
-              <ChevronDown size={12} />
-            </button>
+        <span style={{ maxWidth: "100%", padding: "0 6px", boxSizing: "border-box", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600, color: ready ? (warm ? C.org : C.acc) : C.mut }}>{label}</span>
+        {yieldG !== null && <span style={{ ...MONO, fontSize: 10.5, color: C.mut }}>{fmtG(yieldG)} g</span>}
+      </button>
+    );
+  };
+
+  const engineChip = (text: string, color: string) => !mobile && (
+    <span style={{
+      width: 56, flexShrink: 0, fontSize: 11, color, textAlign: "center",
+      border: `1px solid ${C.bdrL}`, borderRadius: 6, padding: "3px 0",
+    }}>
+      {text}
+    </span>
+  );
+
+  const menu = (p: Profile) => (
+    <div style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        onClick={() => { setMenuId(menuId === p.id ? null : p.id); }}
+        title="Weitere Aktionen"
+        aria-label="Weitere Aktionen"
+        style={iconBtn}
+      >
+        {busyId === p.id ? <RefreshCw size={13} /> : <MoreHorizontal size={15} />}
+      </button>
+      {menuId === p.id && (
+        <>
+          <div onClick={() => { setMenuId(null); }} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
+          <div style={{
+            position: "absolute", top: 40, right: 0, zIndex: 41,
+            background: C.cardElev, border: `1px solid ${C.bdrL}`, borderRadius: 12,
+            padding: 5, minWidth: 210, boxShadow: `0 22px 56px ${alpha(C.black, 0.55)}`,
+          }}>
+            <RowMenuItem icon={<Pencil size={15} />} label="Bearbeiten"
+              onClick={() => { setMenuId(null); onOpenEditor(p.id); }} />
+            {onOpenHistory && (
+              <RowMenuItem icon={<HistoryIcon size={15} />} label="Alle Bezüge"
+                onClick={() => { setMenuId(null); onOpenHistory(p.id); }} />
+            )}
+            <RowMenuItem icon={<Star size={15} />} label={p.isFavorite ? "Aus Favoriten entfernen" : "Zu Favoriten"}
+              onClick={() => { setMenuId(null); void run(p.id, () => profileActions.updateProfile(p.id, { isFavorite: !p.isFavorite })); }} />
+            <RowMenuItem icon={<FlaskConical size={15} />} label={p.isTrial ? "Versuch beendet" : "Als Versuch markieren"}
+              onClick={() => { setMenuId(null); void run(p.id, () => profileActions.updateProfile(p.id, { isTrial: !p.isTrial })); }} />
+            <RowMenuItem icon={<Copy size={15} />} label="Duplizieren"
+              onClick={() => { setMenuId(null); void duplicate(p); }} />
+            <RowMenuItem icon={<Download size={15} />} label="Als JSON exportieren"
+              onClick={() => { setMenuId(null); exportProfile(p, scripts, baskets); }} />
+            <div style={{ height: 1, background: C.bdr, margin: "5px 4px" }} />
+            <RowMenuItem icon={<Trash2 size={15} />} label="Löschen" danger
+              onClick={() => { setMenuId(null); askDelete(p); }} />
           </div>
+        </>
+      )}
+    </div>
+  );
+
+  const nameBlock = (p: Profile, meta: string) => (
+    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+      <button
+        onClick={() => { onOpenEditor(p.id); }}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, minWidth: 0, padding: 0, border: "none",
+          background: "transparent", cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+        }}
+      >
+        {p.isFavorite && <Star size={12} color={C.acc} fill={C.acc} style={{ flexShrink: 0 }} />}
+        {p.isTrial && <FlaskConical size={13} color={C.org} aria-label="Versuch" style={{ flexShrink: 0 }} />}
+        <span style={{ fontSize: 15, fontWeight: 600, color: C.txt, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {p.name}
+        </span>
+      </button>
+      <span style={{ ...MONO, fontSize: 11, color: C.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta}</span>
+    </div>
+  );
+
+  // Als Funktion, nicht als innere Komponente: eine neue Komponente je Render
+  // wuerde die Zeilen beim Ziehen neu einhaengen und den Griff verlieren.
+  const renderRow = (p: Profile, group: Group, index: number) => {
+    const isFlow = p.brewSteps != null;
+    // Startknoepfe je Variante, hoechstens zwei — weitere waehlt man im Start-Dialog.
+    const shown = startVariants(p).slice(0, 2);
+    const start = (v: ProfileVariant | null) =>
+      (v !== null && variantRunsInApp(p, v) ? onExecuteDrive?.(p, v.id) : onExecute(p, v?.id ?? null));
+    const dragging = drag?.group === group && drag.from === index;
+    const meta = [`#${p.id}`, p.targetTempC !== null ? `${p.targetTempC.toFixed(1).replace(".", ",")} °C` : null]
+      .filter(Boolean).join(" · ");
+    return (
+      <div
+        key={p.id}
+        ref={(el) => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }}
+        style={{
+          display: "flex", alignItems: "center", gap: mobile ? 8 : 12,
+          minHeight: 52, boxSizing: "border-box", padding: mobile ? "4px 8px 4px 0" : "4px 12px 4px 0",
+          background: p.isFavorite ? C.accG : C.card,
+          border: `1px solid ${dragging ? C.acc : p.isFavorite ? C.accB : C.bdr}`,
+          borderRadius: 12, opacity: dragging ? 0.6 : 1,
+        }}
+      >
+        <span
+          onPointerDown={(e) => startDrag(e, group, index)}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          aria-label={`${p.name} verschieben`}
+          role="button"
+          style={{
+            width: 32, alignSelf: "stretch", flexShrink: 0, display: "flex", alignItems: "center",
+            justifyContent: "center", color: C.node, cursor: "grab", touchAction: "none",
+          }}
+        >
+          <GripVertical size={16} />
+        </span>
+        {nameBlock(p, meta)}
+        {!mobile && (
+          <span style={{ width: 120, display: "flex", justifyContent: "center", flexShrink: 0 }}>
+            <ProfileSparkline profile={p} script={p.scriptIdSingle !== null ? scriptById.get(p.scriptIdSingle) : undefined} />
+          </span>
         )}
-
-        {/* Name + favorite badge */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {p.isFavorite && <Star size={12} color={C.acc} fill={C.acc} style={{ flexShrink: 0 }} />}
-            <span style={{ fontSize: 13, fontWeight: 600, color: C.txt, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {p.name}
-            </span>
-          </div>
-          {/* Yield targets + profile target brew temp (PT-1) — mono, °C suffix.
-              Each segment omitted when null; whole line hidden if all null. */}
-          {(() => {
-            // Profilnummer zuerst: sie ist die Kennung, ueber die ein Profil
-            // benannt wird (Notizen, Bezugsvergleich) — bisher stand sie nirgends.
-            const segs: string[] = [`#${p.id}`];
-            if (p.yieldTargetSingleG !== null) segs.push(`1×: ${p.yieldTargetSingleG}g`);
-            if (p.yieldTargetDoubleG !== null) segs.push(`2×: ${p.yieldTargetDoubleG}g`);
-            if (p.targetTempC !== null) segs.push(`${p.targetTempC.toFixed(1)} °C`);
-            return segs.length > 0 ? (
-              <div style={{ fontSize: 10, color: C.mut, fontFamily: "'JetBrains Mono', monospace", marginTop: 1 }}>
-                {segs.join(" · ")}
-              </div>
-            ) : null;
-          })()}
+        {engineChip(isFlow ? "App" : "Skript", isFlow ? C.blu : C.txtS)}
+        <div style={{ display: "flex", gap: 8, width: mobile ? undefined : 196, justifyContent: "flex-end", flexShrink: 0 }}>
+          {shown.length > 0
+            ? shown.map((v) => startButton(`v${v.id}`, v.name, v.yieldG, () => start(v)))
+            : startButton("start", "Start", p.yieldTargetSingleG, () => start(null))}
         </div>
-
-        {/* Execute buttons — 1×/2× for both kinds. A flow profile starts the
-            app-side flow-hold drive; a script profile runs the Xenia script.
-            2× is shown/enabled only when a 2× slot exists (double script or
-            double yield). */}
-        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-          <button
-            onClick={() => { tapStart("single"); }}
-            disabled={wiringMissing}
-            title={singleDisabled ? notReadyTitle : undefined}
-            style={startBtn(wiringMissing ? "none" : singleDisabled ? "blocked" : "ready")}
-          >
-            1×
-          </button>
-          <button
-            onClick={() => { if (hasDouble) tapStart("double"); }}
-            disabled={!hasDouble || wiringMissing}
-            title={!hasDouble ? (isFlow ? "Kein 2× Yield" : "Kein Double-Skript") : (!canStartShot ? notReadyTitle : undefined)}
-            style={startBtn(!hasDouble || wiringMissing ? "none" : doubleDisabled ? "blocked" : "ready")}
-          >
-            2×
-          </button>
-        </div>
-
-        {/* Alles, was nicht Starten ist, liegt hinter einem Menü: fünf offene
-            Icon-Knöpfe mal 16 Zeilen waren mehr Rahmen als Inhalt. */}
-        <div style={{ position: "relative", flexShrink: 0 }}>
-          <button
-            onClick={() => { setMenuId(menuId === p.id ? null : p.id); }}
-            title="Weitere Aktionen"
-            aria-label="Weitere Aktionen"
-            style={iconBtn()}
-          >
-            {duplicatingId === p.id || isDeleting ? <RefreshCw size={12} /> : <MoreHorizontal size={14} />}
-          </button>
-          {menuId === p.id && (
-            <>
-              <div onClick={() => { setMenuId(null); }} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
-              <div style={{
-                position: "absolute", top: 26, right: 0, zIndex: 41,
-                background: C.cardElev, border: `1px solid ${C.bdrL}`, borderRadius: 12,
-                padding: 5, minWidth: 196, boxShadow: `0 22px 56px ${alpha(C.black, 0.55)}`,
-              }}>
-                {onOpenScript && p.scriptIdSingle != null && (
-                  <RowMenuItem icon={<FileText size={15} />} label="Skript ansehen"
-                    onClick={() => { setMenuId(null); onOpenScript(p.scriptIdSingle!); }} />
-                )}
-                <RowMenuItem icon={<Pencil size={15} />} label="Bearbeiten"
-                  onClick={() => { setMenuId(null); setEditorProfile(p); onEditorOpen?.(); }} />
-                <RowMenuItem icon={<Copy size={15} />} label="Duplizieren"
-                  onClick={() => { setMenuId(null); void handleDuplicate(p); }} />
-                <RowMenuItem icon={<Download size={15} />} label="Als JSON exportieren"
-                  onClick={() => { setMenuId(null); exportProfile(p); }} />
-                <div style={{ height: 1, background: C.bdr, margin: "5px 4px" }} />
-                <RowMenuItem icon={<Trash2 size={15} />} label="Löschen" danger
-                  onClick={() => { setMenuId(null); void handleDelete(p.id); }} />
-              </div>
-            </>
-          )}
-        </div>
+        {menu(p)}
       </div>
+    );
+  };
+
+  /** Einfuege-Linie beim Ziehen: vor Zeile `to` (nach unten verschoben: hinter `to`). */
+  const lineBefore = (group: Group): number | null => {
+    if (!drag || drag.group !== group || drag.to === drag.from) return null;
+    return drag.to < drag.from ? drag.to : drag.to + 1;
+  };
+  const dropLine = <div style={{ height: 3, background: C.acc, borderRadius: 2, margin: "-1px 0" }} />;
+
+  const renderGroup = (group: Group, list: Profile[]) => {
+    const line = lineBefore(group);
+    return list.map((p, i) => (
+      <div key={p.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {line === i && dropLine}
+        {renderRow(p, group, i)}
+        {line === list.length && i === list.length - 1 && dropLine}
+      </div>
+    ));
+  };
+
+  if (editorProfile !== null) {
+    const p = editorProfile === "new" ? null : editorProfile;
+    return (
+      <ProfileEditorView
+        profile={p}
+        profiles={profiles}
+        scripts={scripts}
+        scriptsSyncing={scriptsSyncing}
+        scriptActions={scriptActions}
+        onSaveProfile={async (data) => {
+          if (p === null) await profileActions.createProfile(data);
+          else await profileActions.updateProfile(p.id, data);
+        }}
+        onClose={onCloseEditor}
+        mobile={mobile}
+        onOpenHistory={onOpenHistoryWith}
+        onOpenCoffee={onOpenCoffee}
+      />
     );
   }
 
   return (
     <div>
+      {deleting && (
+        <Modal onClose={() => setDeleting(null)}>
+          <h3 style={modalTitle}>Profil „{deleting.profile.name}“ löschen?</h3>
+          <p style={modalText}>Die Bezüge bleiben in der Historie.{deleting.own.length > 0 && " Diese Skripte nutzt sonst kein Profil — an der Maschine mit löschen?"}</p>
+          {deleting.own.map((s) => (
+            <label key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 32, fontSize: 13, color: C.txtS, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={deleting.pick.has(s.id)}
+                onChange={() => {
+                  const pick = new Set(deleting.pick);
+                  if (pick.has(s.id)) pick.delete(s.id); else pick.add(s.id);
+                  setDeleting({ ...deleting, pick });
+                }}
+              />
+              Skript #{s.id} „{s.title}“
+            </label>
+          ))}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 10 }}>
+            <button onClick={() => setDeleting(null)} style={dialogBtn(false)}>Abbrechen</button>
+            <button onClick={confirmDelete} style={dialogBtn(true)}>Löschen</button>
+          </div>
+        </Modal>
+      )}
       {rowError && (
         <div
           style={{
@@ -399,26 +560,11 @@ export function Profiles({
         </div>
       )}
 
-      {/* Header: section label + secondary "Skripte" button (UP-8).
-          marginBottom gives the button clear space above the first profile card. */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
-        <div style={{ ...LABEL, marginBottom: 0 }}>Profile</div>
-        {onOpenScript && (
-          <button
-            onClick={() => onOpenScript()}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              background: "transparent", border: `1px solid ${C.bdr}`, cursor: "pointer",
-              color: C.txtS, fontSize: 12, fontFamily: "inherit",
-              padding: "5px 10px", borderRadius: 8, flexShrink: 0,
-              transition: "border-color 0.15s, color 0.15s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.accB; e.currentTarget.style.color = C.txt; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.bdr; e.currentTarget.style.color = C.txtS; }}
-          >
-            <ScrollText size={14} /> Skripte
-          </button>
-        )}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <div style={{ ...LABEL, flex: 1 }}>Profile</div>
+        <button onClick={() => { onOpenEditor("new"); }} style={headerBtn}>
+          <Plus size={14} /> Neues Profil
+        </button>
       </div>
 
       {profiles.length === 0 && (
@@ -427,70 +573,68 @@ export function Profiles({
         </div>
       )}
 
-      {/* UP-9: one list — favorites first (with FAV badge + inline ▲▼), then the rest. */}
-      {ordered.map((p) =>
-        p.isFavorite ? (
-          <ProfileRow
-            key={p.id}
-            p={p}
-            fav
-            favIndex={favorites.findIndex((f) => f.id === p.id)}
-            favTotal={favorites.length}
-          />
-        ) : (
-          <ProfileRow key={p.id} p={p} />
-        ),
-      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {renderGroup("fav", favorites)}
+        {renderGroup("norm", others)}
 
-      {/* Create button */}
-      <button
-        onClick={() => { setEditorProfile("new"); onEditorOpen?.(); }}
-        style={{
-          marginTop: 6,
-          width: "100%",
-          padding: "12px",
-          borderRadius: 10,
-          border: `1px dashed ${C.mut}`,
-          background: "transparent",
-          textAlign: "center",
-          color: C.mut,
-          fontSize: 11,
-          cursor: "pointer",
-          fontFamily: "inherit",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 6,
-          transition: "color 0.15s, border-color 0.15s",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.color = C.txtS;
-          e.currentTarget.style.borderColor = C.txtS;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.color = C.mut;
-          e.currentTarget.style.borderColor = C.mut;
-        }}
-      >
-        <Plus size={14} /> Neues Profil
-      </button>
-
-      {/* ProfileEditor modal */}
-      {editorProfile !== null && (
-        <ProfileEditor
-          profile={editorProfile === "new" ? undefined : editorProfile}
-          scripts={scripts}
-          scriptsSyncing={scriptsSyncing}
-          onSave={async (data) => {
-            if (editorProfile === "new") {
-              await profileActions.createProfile(data as Parameters<typeof profileActions.createProfile>[0]);
-            } else {
-              await profileActions.updateProfile(editorProfile.id, data);
-            }
-          }}
-          onClose={() => setEditorProfile(null)}
-        />
-      )}
+        {(maintenance.length > 0 || loose.length > 0) && (
+          <div style={{ height: 1, background: C.bdrL, margin: "4px 0" }} />
+        )}
+        {maintenance.map((p) => {
+          const scriptTitle = p.scriptIdSingle !== null ? scriptById.get(p.scriptIdSingle)?.title : undefined;
+          return (
+            <div key={p.id} style={{
+              display: "flex", alignItems: "center", gap: mobile ? 8 : 12, minHeight: 46, boxSizing: "border-box",
+              padding: mobile ? "4px 8px 4px 40px" : "4px 12px 4px 44px",
+              background: C.card, border: `1px solid ${C.bdr}`, borderRadius: 12,
+            }}>
+              {nameBlock(p, [`#${p.id}`, scriptTitle ? `Skript „${scriptTitle}“` : null].filter(Boolean).join(" · "))}
+              {engineChip("Wartung", C.org)}
+              <div style={{ display: "flex", width: mobile ? undefined : 196, justifyContent: "flex-end", flexShrink: 0 }}>
+                {startButton("start", "Start", null, () => onExecute(p, startVariants(p)[0]?.id ?? null), true)}
+              </div>
+              {menu(p)}
+            </div>
+          );
+        })}
+        {tests.length > 0 && (
+          <div style={{ height: 1, background: C.bdrL, margin: "4px 0" }} />
+        )}
+        {renderGroup("test", tests)}
+        {loose.map((s) => (
+          <div key={`s${s.id}`} style={{
+            display: "flex", alignItems: "center", gap: mobile ? 8 : 12, minHeight: 46, boxSizing: "border-box",
+            padding: mobile ? "4px 8px 4px 40px" : "4px 12px 4px 44px",
+            border: `1px dashed ${C.bdr2}`, borderRadius: 12,
+          }}>
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
+              <span style={{ ...MONO, fontSize: 11, color: C.mut }}>Skript #{s.id} · {mobile ? "ohne Profil" : "an der Maschine, ohne Profil"}</span>
+            </div>
+            <button onClick={() => { void adoptScript(s); }} style={{ ...headerBtn, color: C.acc, height: 36 }}>
+              Als Profil übernehmen
+            </button>
+            {onDeleteScript && (
+              <button onClick={() => deleteScript(s)} aria-label="An der Maschine löschen" title="An der Maschine löschen" style={iconBtn}>
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
+}
+
+const headerBtn: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6, height: 36, padding: "0 12px",
+  background: "transparent", border: `1px solid ${C.bdr2}`, borderRadius: 9, cursor: "pointer",
+  color: C.txtS, fontSize: 13, fontFamily: "inherit", flexShrink: 0,
+};
+
+function dialogBtn(danger: boolean): React.CSSProperties {
+  return {
+    height: 36, padding: "0 14px", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: danger ? 600 : 500,
+    border: `1px solid ${danger ? C.red : C.bdr2}`, background: "transparent", color: danger ? C.red : C.txtS,
+  };
 }

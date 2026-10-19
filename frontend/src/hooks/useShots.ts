@@ -14,7 +14,7 @@ import type {
   ShotUpdate,
 } from "@shared/types.js";
 
-export type ShotCategoryFilter = "brew" | "maintenance" | "all";
+export type ShotCategoryFilter = "brew" | "maintenance" | "test" | "all";
 
 export interface ShotFilters {
   sort: ShotSortKey;
@@ -22,6 +22,10 @@ export interface ShotFilters {
   beanId: number | null;
   grinderId: number | null;
   profileId: number | null;
+  basketId: number | null;
+  /** Schnitt 4: Spruenge aus dem Netz — alle Roestungen einer Sorte, die gelaufene Variante. */
+  coffeeId: number | null;
+  variantId: number | null;
   /** Exact shot rating 1–5, or null for no filter. */
   rating: number | null;
   /** ISO date YYYY-MM-DD, or null. */
@@ -35,6 +39,9 @@ export const DEFAULT_SHOT_FILTERS: ShotFilters = {
   beanId: null,
   grinderId: null,
   profileId: null,
+  basketId: null,
+  coffeeId: null,
+  variantId: null,
   rating: null,
   startDate: null,
   endDate: null,
@@ -51,6 +58,9 @@ function buildUrl(filters: ShotFilters, offset: number, limit: number): string {
   if (filters.beanId !== null) p.set("bean_id", String(filters.beanId));
   if (filters.grinderId !== null) p.set("grinder_id", String(filters.grinderId));
   if (filters.profileId !== null) p.set("profile_id", String(filters.profileId));
+  if (filters.basketId !== null) p.set("basket_id", String(filters.basketId));
+  if (filters.coffeeId !== null) p.set("coffee_id", String(filters.coffeeId));
+  if (filters.variantId !== null) p.set("variant_id", String(filters.variantId));
   if (filters.rating !== null) p.set("rating", String(filters.rating));
   if (filters.startDate) p.set("start_date", filters.startDate);
   if (filters.endDate) p.set("end_date", filters.endDate);

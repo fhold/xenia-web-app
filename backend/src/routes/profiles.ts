@@ -6,7 +6,7 @@
  * POST   /api/profiles                  — create profile
  * PUT    /api/profiles/:id              — update profile
  * DELETE /api/profiles/:id              — delete profile
- * POST   /api/profiles/favorites/order  — reorder favorites
+ * POST   /api/profiles/order            — reorder the profile list (drag & drop)
  */
 
 import type { FastifyInstance } from "fastify";
@@ -20,6 +20,8 @@ import type {
 } from "../../../shared/src/types.js";
 import { parseTargetTempC } from "../../../shared/src/profile-temp.js";
 import { validateBrewProfile } from "../../../shared/src/brew-steps.js";
+import { checkVariants } from "../db/variant-repo.js";
+import { SqliteBasketRepo } from "../db/basket-repo.js";
 
 function isPositiveYield(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -74,6 +76,29 @@ export function registerProfileRoutes(
   scriptRepo: ScriptRepo,
   onProfilesChanged: () => void,
 ): void {
+  // Schnitt 3c: Varianten fuehren — dann pruefen sie, und die alten Kurven-Felder
+  // des Bodys zaehlen nicht (sie werden aus den Varianten abgeleitet).
+  const baskets = new SqliteBasketRepo();
+  // Wartung schaltet Ventile — das geht nur im Skript, nicht mit App-Stufen.
+  const kindError = (kind: unknown, variants: ProfileCreate["variants"]): string | null => {
+    if (kind === undefined) return null;
+    if (kind !== "brew" && kind !== "maintenance" && kind !== "test") return "kind muss brew, maintenance oder test sein.";
+    if (kind === "maintenance" && variants?.some((v) => v.brewSteps != null)) return "Wartung geht nur mit Skript-Kurven, nicht in der App.";
+    return null;
+  };
+  // Versuch ist ein Schalter — SQLite nimmt sonst jeden Wert.
+  const trialError = (isTrial: unknown): string | null =>
+    (isTrial === undefined || typeof isTrial === "boolean" ? null : "isTrial muss true oder false sein.");
+  const variantError = (variants: unknown) =>
+    checkVariants(variants, {
+      basket: (id) => baskets.findById(id) !== undefined,
+      script: (id) => scriptRepo.findById(id) !== undefined,
+      validSteps: (bp) => {
+        const check = validateBrewProfile(bp);
+        return check.ok ? null : check.error;
+      },
+    });
+
   // ---------------------------------------------------------------------------
   // GET /api/profiles
   // ---------------------------------------------------------------------------
@@ -82,17 +107,17 @@ export function registerProfileRoutes(
   });
 
   // ---------------------------------------------------------------------------
-  // POST /api/profiles/favorites/order
-  // Must be registered BEFORE /:id so Fastify doesn't match "favorites" as id
+  // POST /api/profiles/order — the whole list's order (drag & drop). Favorites
+  // stay on top in listAll; their order is also the dashboard chip order.
   // ---------------------------------------------------------------------------
-  app.post("/api/profiles/favorites/order", async (req, reply) => {
+  app.post("/api/profiles/order", async (req, reply) => {
     const { ids } = req.body as { ids: unknown };
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== "number")) {
       reply.status(400);
       const res: ApiResponse = { ok: false, error: "ids must be an array of numbers" };
       return res;
     }
-    profileRepo.reorderFavorites(ids as number[]);
+    profileRepo.reorder(ids as number[]);
     onProfilesChanged();
     const res: ApiResponse = { ok: true };
     return res;
@@ -164,7 +189,8 @@ export function registerProfileRoutes(
       return res;
     }
 
-    const invariant = checkProfileInvariants(body);
+    const invariant = kindError(body.kind, body.variants) ?? trialError(body.isTrial)
+      ?? (body.variants !== undefined ? variantError(body.variants) : checkProfileInvariants(body));
     if (invariant) {
       reply.status(400);
       const res: ApiResponse = { ok: false, error: invariant };
@@ -239,13 +265,13 @@ export function registerProfileRoutes(
     // state no start path accepts.
     const pick = <K extends keyof ProfileUpdate>(key: K) =>
       patch[key] !== undefined ? patch[key] : (existing[key as keyof typeof existing] as ProfileUpdate[K]);
-    const invariant = checkProfileInvariants({
+    const invariant = kindError(patch.kind, patch.variants) ?? trialError(patch.isTrial) ?? (patch.variants !== undefined ? variantError(patch.variants) : checkProfileInvariants({
       scriptIdSingle: pick("scriptIdSingle"),
       brewSteps: pick("brewSteps"),
       brewStepsDouble: pick("brewStepsDouble"),
       yieldTargetSingleG: pick("yieldTargetSingleG"),
       yieldTargetDoubleG: pick("yieldTargetDoubleG"),
-    });
+    }));
     if (invariant) {
       reply.status(400);
       const res: ApiResponse = { ok: false, error: invariant };

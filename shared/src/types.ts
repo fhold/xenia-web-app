@@ -228,10 +228,21 @@ export interface ScaleStatus {
 // Profile
 // ---------------------------------------------------------------------------
 
+/** Art eines Profils (Schnitt 3): Bezug oder Wartung (Rueckspuelen, Flush). */
+/** "test" = Messlauf-Profil: Laeufe werden als Messlauf aufgezeichnet (siehe ShotCategory). */
+export type ProfileKind = "brew" | "maintenance" | "test";
+
 export interface Profile {
   id: number;
   name: string;
   description: string | null;
+  /**
+   * Bezug oder Wartung. Wartung startet ohne „Bezug vorbereiten“, wird nicht
+   * aufgezeichnet und schaltet den Stopp nach Gewicht nie scharf.
+   */
+  kind: ProfileKind;
+  /** Versuch: nur zum Ausprobieren — der Kolben in Liste und Editor. Nur Anzeige. */
+  isTrial: boolean;
   // no icon field — name alone identifies a profile
   // null = flow-driven profile (brewSteps), no Xenia script.
   scriptIdSingle: number | null;
@@ -260,13 +271,55 @@ export interface Profile {
    * profiles (brewSteps present); mirrors scriptIdDouble for script profiles.
    */
   brewStepsDouble: BrewProfile | null;
+  /** Schnitt 3: die Varianten des Profils, nach Reihenfolge (bis 3c aus den Spalten oben gespiegelt). */
+  variants?: ProfileVariant[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** Frei benanntes Teilrezept eines Profils mit Vorgabe-Sieb (Schnitt 3). */
+export interface ProfileVariant {
+  id: number;
+  name: string;
+  sortOrder: number;
+  defaultBasketId: number | null;
+  yieldG: number | null;
+  /** Skript-Variante; null bei App-Variante oder „wie Variante X“. */
+  scriptId: number | null;
+  /** App-Variante; null bei Skript-Variante oder „wie Variante X“. */
+  brewSteps: BrewProfile | null;
+  /** „wie Variante X“: diese Variante faehrt die Kurve von X. */
+  sameAsId: number | null;
+  /** Skript-Variante: Phasennamen je Phasen-Index (die Maschine kennt keine); null = keine. */
+  phaseNames: (string | null)[] | null;
+  /** Platz aus der 1×/2×-Welt: seit 3c die ersten beiden Varianten (Einzel = erste, Doppel = zweite). */
+  legacySlot: "single" | "double" | null;
+}
+
+/**
+ * Eine Variante beim Speichern (Schnitt 3c). Ohne `id` wird sie angelegt, nicht
+ * mehr genannte werden geloescht. `sameAs` ist der Index der Variante in
+ * derselben Liste, deren Kurve sie faehrt („wie Variante X“).
+ */
+export interface ProfileVariantInput {
+  id?: number | null;
+  name: string;
+  defaultBasketId: number | null;
+  yieldG: number | null;
+  scriptId: number | null;
+  brewSteps: BrewProfile | null;
+  sameAs?: number | null;
+  /** Nur bei eigenem Skript: Phasennamen je Phasen-Index. */
+  phaseNames?: (string | null)[] | null;
 }
 
 /** Body for POST /api/profiles. description is always null in V1. */
 export type ProfileCreate = {
   name: string;
+  /** Fehlt sie beim Anlegen, ist es ein Bezug. */
+  kind?: ProfileKind;
+  /** Versuch (Kolben); fehlt es beim Anlegen, ist es keiner. */
+  isTrial?: boolean;
   /** null = flow-driven profile (brewSteps present), no Xenia script. */
   scriptIdSingle: number | null;
   scriptIdDouble?: number | null;
@@ -281,6 +334,8 @@ export type ProfileCreate = {
   brewSteps?: BrewProfile | null;
   /** Optional 2×-slot sequence, or null to reuse brewSteps for the 2× shot. */
   brewStepsDouble?: BrewProfile | null;
+  /** Schnitt 3c: die Varianten fuehren — die Kurven-Felder oben leiten sich dann daraus ab. */
+  variants?: ProfileVariantInput[];
 };
 
 /** Body for PUT /api/profiles/:id — all fields optional. */
@@ -291,6 +346,10 @@ export type ShotSize = "single" | "double";
 export interface ExecuteRequest {
   profileId: number;
   shotSize: ShotSize;
+  /** Schnitt 3d: die gestartete Variante. Fehlt sie, gilt der Platz aus shotSize (wie bisher). */
+  variantId?: number | null;
+  /** Schnitt 3d: das benutzte Sieb; fehlt es, gilt das Vorgabe-Sieb der Variante. */
+  basketId?: number | null;
   // Step 9 — optional pre-shot data, carried into the resulting shot record.
   // Omitted fields are not persisted; explicit null clears the field.
   beanId?: number | null;
@@ -412,6 +471,12 @@ export interface FlowStep {
   /** Linear setpoint ramp: interpolate from the entry flow to `targetFlowGs`
    *  over `rampMs`, then hold. Omitted/0 = jump straight to target. */
   rampMs?: number;
+  /** Gagne: Ziel ist der Tassenfluss beim Eintritt (Mittel der letzten ~1 s),
+   *  nicht `targetFlowGs` — die Stufe haelt den Fluss, den der Puck an der
+   *  Druckspitze davor von selbst liefert. `targetFlowGs` bleibt der erwartete
+   *  Wert (Kurve) und gilt, wenn beim Eintritt noch kein Fluss da ist — in
+   *  der ersten Stufe also immer. */
+  adoptFlow?: boolean;
   exit: StepExit;
 }
 
@@ -477,6 +542,10 @@ export interface BrewProfile {
 export interface DriveStartRequest {
   profileId: number;
   shotSize: ShotSize;
+  /** Schnitt 3d: die gestartete Variante (siehe ExecuteRequest). */
+  variantId?: number | null;
+  /** Schnitt 3d: das benutzte Sieb. */
+  basketId?: number | null;
   /** Per-drive yield override (g); null/omitted = profile default. */
   yieldTargetOverrideG?: number | null;
   // Pre-shot data carried into the resulting shot record (as with execute).
@@ -842,6 +911,41 @@ export interface GrinderCreate {
 export type GrinderUpdate = Partial<GrinderCreate>;
 
 // ---------------------------------------------------------------------------
+// Sieb — Ausruestung wie die Muehle (vereinter Editor, Schnitt 3b). Kurzer
+// Name („IMS 1er“), freie Beschreibung, Nenndosis. Das Sieb selbst ist die
+// Einheit (Vorbelegung, Geisterkurven, Hinweis im Start-Dialog); der Typ
+// bleibt nur fuer die alte 1×/2×-Zuordnung (shot_size) und wird nicht mehr
+// abgefragt — ein 3er-Sieb ist einfach ein weiteres Sieb.
+// ---------------------------------------------------------------------------
+
+export type BasketType = "single" | "double" | "he";
+export const BASKET_TYPES: BasketType[] = ["single", "double", "he"];
+
+export interface Basket {
+  id: number;
+  name: string;
+  type: BasketType;
+  /** Frei, z. B. „HE-Basket Mischief, 18 Löcher“; null = keine. */
+  description: string | null;
+  /** Dosis-Vorschlag (g), solange es mit dem Sieb keinen Bezug gibt; null = keiner. */
+  nominalDoseG: number | null;
+  /** Unix ms. */
+  createdAt: number;
+  /** Unix ms. */
+  updatedAt: number;
+}
+
+export interface BasketCreate {
+  name: string;
+  /** Fehlt er, gilt „single“ — nur noch fuer die alte 1×/2×-Zuordnung. */
+  type?: BasketType;
+  description?: string | null;
+  nominalDoseG?: number | null;
+}
+
+export type BasketUpdate = Partial<BasketCreate>;
+
+// ---------------------------------------------------------------------------
 // Shot recording — Phase 1 Step 5
 // ---------------------------------------------------------------------------
 
@@ -874,11 +978,24 @@ export type StopMode =
   | "flowhold_watchdog";
 
 /** Category derived from the script at execution time. */
-export type ShotCategory = "brew" | "maintenance";
+/** "test" = Messlauf: aufgezeichnet, zaehlt aber nirgends (nur ueber den Historien-Filter sichtbar). */
+export type ShotCategory = "brew" | "maintenance" | "test";
 
 /** A completed or in-progress shot stored in the `shot` table. */
 /** Post-shot grind note (one tap). */
 export type GrindNote = "finer" | "ok" | "coarser";
+
+/**
+ * Woher der vorbelegte Mahlgrad im Start-Dialog kommt (Schnitt 3e): die Stufe
+ * der Kaskade und der Quellbezug samt seinem Mahlgrad-Hinweis.
+ */
+export interface GrindSource {
+  /** „roast“: gleiches Profil + Sieb + Muehle mit einer Sorte gleichen Roestgrads — Startpunkt fuer neue Bohnen. */
+  stage: "profileBasket" | "bean" | "coffee" | "roast" | "grinder";
+  shotId: number;
+  startedAt: number;
+  grindNote: GrindNote | null;
+}
 
 /**
  * Staerke des Channelings. null bei gesetztem `channeling` heisst "unbekannt" —
@@ -886,6 +1003,16 @@ export type GrindNote = "finer" | "ok" | "coarser";
  * bewusst nicht nachtraeglich als "leicht" oder "stark" ausgegeben.
  */
 export type ChannelingSeverity = "light" | "strong";
+/** Geschmack gegenueber dem letzten Bezug derselben Sorte (Einstellung rating_compare_prev). */
+export type VsPrev = "worse" | "same" | "better";
+
+/** GET /api/shots/:id/compare — womit die Bewertung vergleicht. */
+export interface ShotCompare {
+  /** Einstellung rating_compare_prev. */
+  enabled: boolean;
+  /** Letzter beendeter Bezug derselben Sorte vor diesem; null = keiner (oder ohne Sorte). */
+  previous: { id: number; startedAt: number; profileName: string | null; grindSetting: number | null } | null;
+}
 
 /**
  * Canonical taste-tag keys for the shot rating. UI labels come from i18n
@@ -907,6 +1034,9 @@ export interface Shot {
   id: number;
   /** null if the profile was deleted after the shot (ON DELETE SET NULL). */
   profileId: number | null;
+  /** Schnitt 3: gelaufene Variante und benutztes Sieb (null = unbekannt). */
+  variantId?: number | null;
+  basketId?: number | null;
   /** null for app-driven step-based brews (Cut-2), which run no Xenia script. */
   scriptId: number | null;
   shotSize: ShotSize;
@@ -948,6 +1078,10 @@ export interface Shot {
   channeling: boolean;
   /** Staerke, nur bei channeling=true; null = unbekannt (Altbestand). */
   channelingSeverity: ChannelingSeverity | null;
+  /** Geschmack gegenueber dem letzten Bezug derselben Sorte; null = nicht verglichen. */
+  vsPrev?: VsPrev | null;
+  /** Der Bezug, gegen den verglichen wurde (bleibt, auch wenn spaeter einer dazwischenkommt). */
+  vsPrevShotId?: number | null;
   /** True when the machine reported a frozen/constant implausible weight the
    *  whole brew (scale glitch) → yield is null and the tablet alerts. */
   scaleFrozen: boolean;
@@ -968,6 +1102,9 @@ export interface Shot {
 /** Input for ShotRepo.createShot() — fields known at shot start. */
 export interface NewShot {
   profileId: number;
+  /** Schnitt 3: gelaufene Variante und benutztes Sieb (null = unbekannt). */
+  variantId?: number | null;
+  basketId?: number | null;
   /** null for app-driven step-based brews (Cut-2), which run no Xenia script. */
   scriptId: number | null;
   shotSize: ShotSize;
@@ -1081,6 +1218,9 @@ export interface RecentShot {
   profileId: number | null;
   profileName: string;
   shotSize: ShotSize;
+  /** Schnitt 3: gelaufene Variante und benutztes Sieb — Wiederholen nimmt beide. */
+  variantId?: number | null;
+  basketId?: number | null;
   beanId: number | null;
   /** Freitext-Bohne (Fremdbohne ohne gepflegte Sorte), sonst null. */
   beanLabel: string | null;
@@ -1114,6 +1254,9 @@ export interface ShotListItem {
   profileId: number | null;
   profileName: string;
   shotSize: ShotSize;
+  /** Schnitt 3: gelaufene Variante und benutztes Sieb. */
+  variantId?: number | null;
+  basketId?: number | null;
   category: ShotCategory;
   startedAt: number;
   endedAt: number | null;
@@ -1129,6 +1272,8 @@ export interface ShotListItem {
   extractionOver: boolean;
   channeling: boolean;
   channelingSeverity: ChannelingSeverity | null;
+  vsPrev?: VsPrev | null;
+  vsPrevShotId?: number | null;
   tasteTags: TasteTag[] | null;
   grindNote: GrindNote | null;
   notes: string | null;
@@ -1162,6 +1307,8 @@ export interface ShotListResponse {
 
 /** Body for PUT /api/shots/:id — only these fields may be edited. */
 export interface ShotUpdate {
+  /** Schnitt 3e: das benutzte Sieb korrigieren; shot_size folgt seinem Typ. */
+  basketId?: number;
   beanId?: number | null;
   beanLabel?: string | null;
   grinderId?: number | null;
@@ -1178,6 +1325,9 @@ export interface ShotUpdate {
   channeling?: boolean;
   /** Gesetzt → channeling wird true; channeling=false → Staerke wird geleert. */
   channelingSeverity?: ChannelingSeverity | null;
+  /** Vergleich mit dem letzten Bezug; null loescht ihn (samt vsPrevShotId). */
+  vsPrev?: VsPrev | null;
+  vsPrevShotId?: number | null;
   tasteTags?: TasteTag[] | null;
   grindNote?: GrindNote | null;
   notes?: string | null;

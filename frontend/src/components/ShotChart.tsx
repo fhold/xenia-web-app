@@ -574,7 +574,7 @@ function ShotChartInner({
               angle: -90,
               position: "insideLeft",
               offset: 10,
-              style: { fill: C.dim, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" },
+              style: { fill: C.mut, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" },
             }}
           />
 
@@ -594,7 +594,7 @@ function ShotChartInner({
                 angle: 90,
                 position: "insideRight",
                 offset: 12,
-                style: { fill: C.dim, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" },
+                style: { fill: C.mut, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" },
               }}
             />
           )}

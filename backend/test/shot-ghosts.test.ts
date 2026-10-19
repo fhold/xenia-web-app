@@ -99,7 +99,8 @@ function createSchema(): void {
       ended_at      INTEGER,
       brew_def_hash TEXT,
       scale_lost    INTEGER,
-      shot_size     TEXT NOT NULL DEFAULT 'single'
+      shot_size     TEXT NOT NULL DEFAULT 'single',
+      basket_id     INTEGER
     );
 
     CREATE TABLE shot_sample (
@@ -122,12 +123,13 @@ function addShot(o: {
   scaleLost?: boolean;
   nSamples?: number;
   size?: string;
+  basket?: number | null;
 }): number {
   const db = getDb();
   const info = db
     .prepare(
-      `INSERT INTO shot (profile_id, category, started_at, ended_at, brew_def_hash, scale_lost, shot_size)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO shot (profile_id, category, started_at, ended_at, brew_def_hash, scale_lost, shot_size, basket_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       o.profileId ?? 1,
@@ -137,6 +139,7 @@ function addShot(o: {
       o.hash ?? null,
       o.scaleLost ? 1 : 0,
       o.size ?? "single",
+      o.basket ?? null,
     );
   const id = Number(info.lastInsertRowid);
   const n = o.nSamples ?? 20;
@@ -237,4 +240,15 @@ test("samples come back grouped per shot and in time order", () => {
 
 test("no ids in, no query out", () => {
   assert.equal(repo.listGhostSamples([]).size, 0);
+});
+
+test("hat der Bezug ein Sieb, teilen nur Bezüge mit demselben Sieb die Wolke — zwei 1er-Siebe mischen sich nicht", () => {
+  const ims = addShot({ startedAt: 9_000_000, basket: 1 });
+  addShot({ startedAt: 9_001_000, basket: 4 });          // anderes 1er-Sieb, gleiche Groesse
+  const imsAgain = addShot({ startedAt: 9_002_000, basket: 1 });
+  const ids = q({ basketId: 1 });
+  assert.ok(ids.includes(ims) && ids.includes(imsAgain));
+  assert.equal(ids.some((id) => (getDb().prepare("SELECT basket_id FROM shot WHERE id = ?").get(id) as { basket_id: number | null }).basket_id !== 1), false);
+  // ohne Sieb (Altbezug) wie bisher nach 1×/2×
+  assert.ok(q().includes(ims));
 });

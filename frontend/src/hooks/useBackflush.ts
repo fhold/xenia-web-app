@@ -7,7 +7,8 @@ export interface BackflushStatus {
   daysAgo: number | null;
   due: boolean;
   thresholdDays: number;
-  scriptIds: number[];
+  /** Wartungsprofile, deren Laeufe als Rueckspuelen zaehlen. */
+  profileIds: number[];
   snoozeUntil: number;
 }
 

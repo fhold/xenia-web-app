@@ -7,6 +7,7 @@
 import { Target, Snowflake, Flame, Move, ThumbsUp, Pencil, Archive } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { computeEffectiveAgeDays } from "@shared/coffee.js";
+import { formatRoastDate } from "../lib/dates.js";
 import type { Bean } from "@shared/types.js";
 import theme, { alpha } from "../theme.js";
 
@@ -54,7 +55,7 @@ export function RoastingActionSheet({
   const age = computeEffectiveAgeDays(roasting.roastDate, roasting.frozenDate, roasting.thawDate);
   const statusLabel = t(`beans.status.${roasting.status}`);
   const dateLabel = roasting.roastDate
-    ? new Intl.DateTimeFormat("de-DE", { day: "numeric", month: "short" }).format(new Date(roasting.roastDate))
+    ? formatRoastDate(roasting.roastDate)
     : t("coffee.noDate");
 
   return (

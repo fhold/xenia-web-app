@@ -117,7 +117,7 @@ export interface CoffeeImage {
 const COUNT_SELECT = `
   c.*,
   (SELECT COUNT(*) FROM bean b WHERE b.coffee_id = c.id) AS roasting_count,
-  (SELECT COUNT(*) FROM shot s JOIN bean b ON b.id = s.bean_id WHERE b.coffee_id = c.id) AS shot_count,
+  (SELECT COUNT(*) FROM shot s JOIN bean b ON b.id = s.bean_id WHERE b.coffee_id = c.id AND s.category = 'brew') AS shot_count,
   (SELECT MAX(s.started_at) FROM shot s JOIN bean b ON b.id = s.bean_id
     WHERE b.coffee_id = c.id AND s.category = 'brew') AS last_shot_at,
   (SELECT updated_at FROM coffee_image i WHERE i.coffee_id = c.id) AS image_updated_at

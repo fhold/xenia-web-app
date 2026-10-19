@@ -16,6 +16,9 @@
 const preShotProps = {
   profileId: { type: "integer", minimum: 1 },
   shotSize: { type: "string", enum: ["single", "double"] },
+  // Schnitt 3d: Variante und Sieb; ohne Variante gilt der Platz aus shotSize.
+  variantId: { type: ["integer", "null"], minimum: 1 },
+  basketId: { type: ["integer", "null"], minimum: 1 },
   beanId: { type: ["integer", "null"] },
   // Freitext-Bohne: kurz halten, das Feld steht in Listenzeilen.
   beanLabel: { type: ["string", "null"], maxLength: 120 },

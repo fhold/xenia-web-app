@@ -48,6 +48,7 @@ const ALLOWED: Record<string, SettingDef> = {
   post_brew_stable_window_ms:    { type: "number",  min: 100,  max: 5000 },
   language:                      { type: "enum",    values: ["de", "en"] },
   show_tds_input:                { type: "boolean" },
+  rating_compare_prev:           { type: "boolean" },
   bean_fields_origin:            { type: "boolean" },
   bean_fields_inventory:         { type: "boolean" },
   bean_fields_aroma:             { type: "boolean" },
@@ -60,7 +61,7 @@ const ALLOWED: Record<string, SettingDef> = {
   // Rückspül-Reminder
   backflush_reminder_enabled:    { type: "boolean" },
   backflush_reminder_days:       { type: "number",  min: 1, max: 365 },
-  backflush_script_ids:          { type: "string",  pattern: /^(\d+(,\d+)*)?$/ }, // "" or "3,7,26"
+  backflush_profile_ids:         { type: "string",  pattern: /^(\d+(,\d+)*)?$/ }, // "" or "2,7"
 };
 
 // ---------------------------------------------------------------------------

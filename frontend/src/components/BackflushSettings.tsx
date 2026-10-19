@@ -7,8 +7,7 @@
 import { useEffect, useState } from "react";
 import { Toggle } from "./Toggle.js";
 import { useBackflush } from "../hooks/useBackflush.js";
-import { useScripts } from "../hooks/useScripts.js";
-import { effectiveCategory } from "@shared/bbw-arming.js";
+import { useProfiles } from "../hooks/useProfiles.js";
 import { useTranslation } from "../i18n/index.js";
 import theme from "../theme.js";
 
@@ -40,21 +39,18 @@ const descStyle: React.CSSProperties = { fontSize: 12, color: C.mut };
 export function BackflushSettings() {
   const { t } = useTranslation();
   const { status, refetch } = useBackflush();
-  const { scripts } = useScripts();
+  const { profiles } = useProfiles();
 
   const enabled = status?.enabled ?? true;
-  const selected = new Set(status?.scriptIds ?? []);
+  const selected = new Set(status?.profileIds ?? []);
 
   const [daysInput, setDaysInput] = useState("");
   useEffect(() => {
     if (status) setDaysInput(String(status.thresholdDays));
   }, [status?.thresholdDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const maintenanceScripts = scripts.filter(
-    (s) =>
-      effectiveCategory({ categoryAuto: s.categoryAuto, categoryOverride: s.categoryOverride }) ===
-      "maintenance",
-  );
+  // Schnitt 3: Rueckspuelen zaehlt je Wartungsprofil, nicht mehr je Skript.
+  const maintenanceProfiles = profiles.filter((p) => p.kind === "maintenance");
 
   const saveDays = async () => {
     const n = Math.max(1, Math.min(365, Math.round(parseFloat(daysInput) || 14)));
@@ -63,11 +59,11 @@ export function BackflushSettings() {
     await refetch();
   };
 
-  const toggleScript = async (id: number) => {
+  const toggleProfile = async (id: number) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    await putSetting("backflush_script_ids", [...next].join(","));
+    await putSetting("backflush_profile_ids", [...next].join(","));
     await refetch();
   };
 
@@ -126,23 +122,23 @@ export function BackflushSettings() {
       </div>
 
       <div style={{ padding: "10px 0" }}>
-        <div style={labelStyle}>{t("settings.backflush.scripts.label")}</div>
-        <div style={{ ...descStyle, marginBottom: 8 }}>{t("settings.backflush.scripts.description")}</div>
-        {maintenanceScripts.length === 0 ? (
-          <div style={{ fontSize: 12, color: C.mut }}>{t("settings.backflush.scripts.empty")}</div>
+        <div style={labelStyle}>{t("settings.backflush.profiles.label")}</div>
+        <div style={{ ...descStyle, marginBottom: 8 }}>{t("settings.backflush.profiles.description")}</div>
+        {maintenanceProfiles.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.mut }}>{t("settings.backflush.profiles.empty")}</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {maintenanceScripts.map((s) => (
+            {maintenanceProfiles.map((p) => (
               <label
-                key={s.id}
+                key={p.id}
                 style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.txt }}
               >
                 <input
                   type="checkbox"
-                  checked={selected.has(s.id)}
-                  onChange={() => { void toggleScript(s.id); }}
+                  checked={selected.has(p.id)}
+                  onChange={() => { void toggleProfile(p.id); }}
                 />
-                {s.title}
+                {p.name}
               </label>
             ))}
           </div>

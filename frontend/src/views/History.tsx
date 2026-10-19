@@ -7,14 +7,16 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SlidersHorizontal, ChevronLeft } from "lucide-react";
+import { SlidersHorizontal, ChevronLeft, X } from "lucide-react";
 import { useShots, DEFAULT_SHOT_FILTERS } from "../hooks/useShots.js";
 import { makeUniqueRoastingLabels } from "../lib/roastingFilterLabel.js";
-import type { ShotCategoryFilter } from "../hooks/useShots.js";
+import { formatDay } from "../lib/dates.js";
+import type { ShotCategoryFilter, ShotFilters } from "../hooks/useShots.js";
 import { useBeans } from "../hooks/useBeans.js";
 import { useGrinders } from "../hooks/useGrinders.js";
 import { useProfiles } from "../hooks/useProfiles.js";
-import { ShotHistoryCard } from "../components/ShotHistoryCard.js";
+import { useBaskets, basketName } from "../hooks/useBaskets.js";
+import { ShotHistoryCard, HISTORY_COLS } from "../components/ShotHistoryCard.js";
 import { ShotDetailModal } from "../components/ShotDetailModal.js";
 import { ShotEditModal } from "../components/ShotEditModal.js";
 import { useTranslation } from "../i18n/index.js";
@@ -166,19 +168,22 @@ interface HistoryProps {
   onRepeat: (shot: ShotListItem) => void;
   /** F-B7: pre-filter by this roasting (bean) id when arriving from the Beans view. */
   initialBeanId?: number | null;
-  /** Called once the initial bean filter has been applied (so App can clear it). */
-  onInitialBeanApplied?: () => void;
+  /** „Alle Bezüge“ aus der Profilliste: auf dieses Profil filtern. */
+  initialProfileId?: number | null;
+  /** Schnitt 4: Sprung aus dem Netz Profil ↔ Bohne mit diesen Filtern — und
+   *  bei der Rueckkehr die zuletzt gesetzten. */
+  initialFilters?: Partial<ShotFilters> | null;
   /** BB-a: open this shot's detail on arrival (Best-Brew reference tap from Beans). */
   initialShotId?: number | null;
-  /** Called once the initial shot deep-link has been consumed (so App can clear it). */
-  onInitialShotApplied?: () => void;
-  /** SD-1: back affordance to the originating Sorte detail (set when arrived from Beans). */
+  /** Rueckweg: Filter und offener Bezug, damit Zurueck sie wieder herstellt. */
+  onLocationState?: (st: { filters: ShotFilters; shotId: number | null }) => void;
+  /** Zurueck-Knopf, wenn man per Sprung hergekommen ist. */
   onBack?: () => void;
   /** Klick auf den Profilnamen in der Detailansicht: Profil im Editor oeffnen. */
   onOpenProfile?: (profileId: number) => void;
 }
 
-export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat, initialBeanId = null, onInitialBeanApplied, initialShotId = null, onInitialShotApplied, onBack, onOpenProfile }: HistoryProps) {
+export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat, initialBeanId = null, initialProfileId = null, initialFilters = null, initialShotId = null, onLocationState, onBack, onOpenProfile }: HistoryProps) {
   const repeatBlocked = !canStartBrew;
   const { t, lang } = useTranslation();
   const {
@@ -191,26 +196,37 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
   useEffect(() => {
     if (initialBeanId !== null) {
       setFilters({ ...DEFAULT_SHOT_FILTERS, beanId: initialBeanId });
-      onInitialBeanApplied?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBeanId]);
+  useEffect(() => {
+    if (initialFilters !== null) {
+      setFilters({ ...DEFAULT_SHOT_FILTERS, ...initialFilters });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFilters]);
+  useEffect(() => {
+    if (initialProfileId !== null) {
+      setFilters({ ...DEFAULT_SHOT_FILTERS, profileId: initialProfileId });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProfileId]);
   const { beans } = useBeans();
   const { grinders } = useGrinders();
   const { profiles } = useProfiles();
+  const { baskets } = useBaskets();
+  // Die Variante steht nur dabei, wenn das Profil mehrere hat.
+  const variantName = (s: ShotListItem): string | null => {
+    const vs = profiles.find((p) => p.id === s.profileId)?.variants ?? [];
+    return vs.length > 1 ? (vs.find((v) => v.id === s.variantId)?.name ?? null) : null;
+  };
 
   // 3q: unique, readable label per roasting in the bean filter (make-unique).
   // Date formatting (de-DE, same pattern as the §3d pickers) is done here and
   // passed into the pure helper as strings. `lang` in deps → relabel on switch.
   const beanFilterLabels = useMemo(() => {
-    const fmt = (d: Date, withYear: boolean): string =>
-      Number.isNaN(d.getTime())
-        ? ""
-        : new Intl.DateTimeFormat("de-DE", {
-            day: "numeric",
-            month: "short",
-            ...(withYear ? { year: "numeric" } : {}),
-          }).format(d);
+    // Kurz: Jahr nur, wenn nicht das laufende — lang: immer (lib/dates).
+    const fmt = (d: Date, withYear: boolean): string => formatDay(d, { year: withYear ? "always" : "auto" });
     const inputs = beans.map((b) => ({
       id: b.id,
       coffeeName: b.name,
@@ -235,8 +251,8 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
   useEffect(() => {
     if (initialShotId !== null) {
       setPendingShotId(initialShotId);
-      setFilters({ ...DEFAULT_SHOT_FILTERS });
-      onInitialShotApplied?.();
+      // Bei der Rueckkehr stehen die Filter mit drin — die bleiben.
+      if (initialFilters === null) setFilters({ ...DEFAULT_SHOT_FILTERS });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialShotId]);
@@ -247,6 +263,12 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
     else if (hasMore) loadMore();
     else setPendingShotId(null);
   }, [pendingShotId, shots, loading, hasMore, loadMore]);
+
+  // Rueckweg: Filter und offenen Bezug am Eintrag im Verlauf merken.
+  useEffect(() => {
+    onLocationState?.({ filters, shotId: detailShot?.id ?? pendingShotId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, detailShot, pendingShotId]);
 
   // --- Infinite scroll: observe a sentinel at the list bottom ---
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -282,25 +304,68 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
     filters.beanId !== null ||
     filters.grinderId !== null ||
     filters.profileId !== null ||
+    filters.basketId !== null ||
+    filters.coffeeId !== null ||
+    filters.variantId !== null ||
     filters.rating !== null ||
     filters.startDate !== null ||
     filters.endDate !== null ||
     filters.category !== DEFAULT_SHOT_FILTERS.category;
 
-  const CATEGORIES: ShotCategoryFilter[] = ["brew", "maintenance", "all"];
+  // Aktive Filter als Chips ueber der Liste — einzeln entfernbar, damit nach
+  // einem Sprung (Profil, Bohne) sichtbar ist, was die Liste eingrenzt.
+  const chips: { key: string; label: string; clear: () => void }[] = [];
+  if (filters.category !== DEFAULT_SHOT_FILTERS.category) {
+    chips.push({ key: "cat", label: `${t("history.filter.category")}: ${t(`history.category.${filters.category}`)}`, clear: () => patch({ category: DEFAULT_SHOT_FILTERS.category }) });
+  }
+  if (filters.profileId !== null) {
+    const name = profiles.find((p) => p.id === filters.profileId)?.name ?? `#${filters.profileId}`;
+    chips.push({ key: "profile", label: `${t("history.filter.profile")}: ${name}`, clear: () => patch({ profileId: null }) });
+  }
+  if (filters.coffeeId !== null) {
+    const name = beans.find((b) => b.coffeeId === filters.coffeeId)?.name ?? `#${filters.coffeeId}`;
+    chips.push({ key: "coffee", label: `${t("history.filter.coffee")}: ${name}`, clear: () => patch({ coffeeId: null }) });
+  }
+  if (filters.variantId !== null) {
+    const name = profiles.flatMap((p) => p.variants ?? []).find((v) => v.id === filters.variantId)?.name ?? `#${filters.variantId}`;
+    chips.push({ key: "variant", label: `${t("history.filter.variant")}: ${name}`, clear: () => patch({ variantId: null }) });
+  }
+  if (filters.basketId !== null) {
+    const name = basketName(baskets, filters.basketId) ?? `#${filters.basketId}`;
+    chips.push({ key: "basket", label: `${t("history.filter.basket")}: ${name}`, clear: () => patch({ basketId: null }) });
+  }
+  if (filters.beanId !== null) {
+    const name = beanFilterLabels.get(filters.beanId) ?? beans.find((b) => b.id === filters.beanId)?.name ?? `#${filters.beanId}`;
+    chips.push({ key: "bean", label: `${t("history.filter.bean")}: ${name}`, clear: () => patch({ beanId: null }) });
+  }
+  if (filters.grinderId !== null) {
+    const name = grinders.find((g) => g.id === filters.grinderId)?.name ?? `#${filters.grinderId}`;
+    chips.push({ key: "grinder", label: `${t("history.filter.grinder")}: ${name}`, clear: () => patch({ grinderId: null }) });
+  }
+  if (filters.rating !== null) {
+    chips.push({ key: "rating", label: `${t("history.filter.rating")}: ${filters.rating}★`, clear: () => patch({ rating: null }) });
+  }
+  if (filters.startDate !== null || filters.endDate !== null) {
+    const label = datePreset !== "custom" && datePreset !== "all"
+      ? t(`history.datePreset.${datePreset}`)
+      : `${filters.startDate ?? "…"} – ${filters.endDate ?? "…"}`;
+    chips.push({ key: "date", label: `${t("history.filter.dateRange")}: ${label}`, clear: () => { setDatePreset("all"); patch({ startDate: null, endDate: null }); } });
+  }
+
+  const CATEGORIES: ShotCategoryFilter[] = ["brew", "maintenance", "test", "all"];
   const RATINGS = [5, 4, 3, 2, 1];
   const SORTS: ShotSortKey[] = ["date_desc", "date_asc", "rating", "bean"];
   const PRESETS: Exclude<DatePreset, "custom">[] = ["today", "week", "month", "quarter", "all"];
 
   return (
-    <div style={{ maxWidth: mobile ? undefined : 720, margin: mobile ? undefined : "0 auto" }}>
-      {/* SD-1: back to the originating Sorte detail when arrived via a roasting tap. */}
+    <div style={{ maxWidth: mobile ? undefined : 1100, margin: mobile ? undefined : "0 auto" }}>
+      {/* Zurueck dorthin, woher der Sprung kam (Sorte, Editor, Profilliste). */}
       {onBack && (
         <button
           onClick={onBack}
           style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: C.mut, cursor: "pointer", fontSize: 13, fontFamily: "inherit", marginBottom: 12, padding: 0 }}
         >
-          <ChevronLeft size={16} />{t("history.backToCoffee")}
+          <ChevronLeft size={16} />{t("history.back")}
         </button>
       )}
       {/* Header: count + filter toggle + sort */}
@@ -314,7 +379,7 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
         }}
       >
         <span style={{ fontSize: 13, color: C.mut, flex: 1 }}>
-          {t("history.count").replace("{n}", String(total))}
+          {t(filters.category === "test" ? "history.countTest" : filters.category === "maintenance" ? "history.countMaintenance" : filters.category === "all" ? "history.countAll" : "history.count").replace("{n}", String(total))}
         </span>
 
         <select
@@ -378,7 +443,7 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr",
+              gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr 1fr",
               gap: 10,
             }}
           >
@@ -415,6 +480,18 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
                 <option value="">{t("history.allOption")}</option>
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </FilterField>
+            <FilterField label={t("history.filter.basket")}>
+              <select
+                style={selectStyle}
+                value={filters.basketId ?? ""}
+                onChange={(e) => patch({ basketId: e.target.value === "" ? null : Number(e.target.value) })}
+              >
+                <option value="">{t("history.allOption")}</option>
+                {baskets.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>
             </FilterField>
@@ -493,6 +570,49 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
         </div>
       )}
 
+      {/* Aktive Filter */}
+      {chips.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {chips.map((c) => (
+            <span
+              key={c.key}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 2, height: 30, boxSizing: "border-box",
+                padding: "0 2px 0 10px", borderRadius: 15, border: `1px solid ${C.accB}`,
+                background: C.accG, color: C.accLight, fontSize: 12.5,
+              }}
+            >
+              {c.label}
+              <button
+                onClick={c.clear}
+                aria-label={`${c.label} — ${t("history.removeFilter")}`}
+                style={{ width: 26, height: 26, border: "none", borderRadius: 13, background: "transparent", color: C.mut, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+          <button
+            onClick={handleReset}
+            style={{ height: 30, padding: "0 8px", border: "none", background: "transparent", color: C.mut, fontSize: 12.5, fontFamily: "inherit", cursor: "pointer" }}
+          >
+            {t("history.clearFilters")}
+          </button>
+        </div>
+      )}
+
+      {/* Spaltenkopf — dieselben Breiten wie die Zeilen */}
+      {!mobile && shots.length > 0 && !loading && !error && (
+        <div style={{ display: "flex", alignItems: "center", columnGap: 12, padding: "0 10px 6px 14px", fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: C.mut }}>
+          <span style={{ flex: 1 }}>{t("history.columns.shot")}</span>
+          <span style={{ width: HISTORY_COLS.grind }}>{t("history.columns.grind")}</span>
+          <span style={{ width: HISTORY_COLS.rating }}>{t("history.columns.rating")}</span>
+          <span style={{ width: HISTORY_COLS.channeling }}>{t("history.columns.channeling")}</span>
+          <span style={{ width: HISTORY_COLS.yield }}>{t("history.columns.yield")}</span>
+          <span style={{ width: HISTORY_COLS.actions }} />
+        </div>
+      )}
+
       {/* List */}
       {error ? (
         <div style={{ color: C.red, fontSize: 13, padding: "40px 0", textAlign: "center" }}>
@@ -505,11 +625,14 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
           {anyNarrowing ? t("history.emptyFiltered") : t("history.empty")}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {shots.map((shot) => (
             <ShotHistoryCard
               key={shot.id}
               shot={shot}
+              basketName={basketName(baskets, shot.basketId)}
+              variantName={variantName(shot)}
+              mobile={mobile}
               onOpen={setDetailShot}
               onEdit={setEditShot}
               onRepeat={onRepeat}

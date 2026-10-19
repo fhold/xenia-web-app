@@ -23,6 +23,8 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerBeanRoutes } from "./routes/beans.js";
 import { registerCoffeeRoutes } from "./routes/coffees.js";
 import { registerGrinderRoutes } from "./routes/grinders.js";
+import { registerNetworkRoutes } from "./routes/network.js";
+import { registerBasketRoutes } from "./routes/baskets.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
 import { registerBestBrewRoutes } from "./routes/best-brew.js";
 import { SqliteScriptRepo } from "./db/script-repo.js";
@@ -33,6 +35,7 @@ import { SqliteShotRepo } from "./db/shot-repo.js";
 import { SqliteBeanRepo } from "./db/bean-repo.js";
 import { SqliteCoffeeRepo } from "./db/coffee-repo.js";
 import { SqliteGrinderRepo } from "./db/grinder-repo.js";
+import { SqliteBasketRepo } from "./db/basket-repo.js";
 import { SqliteBestBrewRepo } from "./db/best-brew-repo.js";
 import { ShotRecorder } from "./shots/recorder.js";
 import { FlowHoldDriver } from "./xenia/flow-hold-driver.js";
@@ -121,6 +124,7 @@ async function start(): Promise<void> {
   const beanRepo = new SqliteBeanRepo();
   const coffeeRepo = new SqliteCoffeeRepo();
   const grinderRepo = new SqliteGrinderRepo();
+  const basketRepo = new SqliteBasketRepo();
   const bestBrewRepo = new SqliteBestBrewRepo();
   const maintenanceLog = new SqliteMaintenanceLogRepo();
   const recorder = new ShotRecorder(shotRepo, settingsRepo, client, rootLogger);
@@ -190,11 +194,13 @@ async function start(): Promise<void> {
     gateFrame,
   );
   registerProfileRoutes(app, profileRepo, scriptRepo, () => hub.broadcastProfilesChanged());
-  registerShotRoutes(app, client, shotRepo, recorder, beanRepo, profileRepo, scriptRepo, bestBrewRepo, (shot) => hub.broadcastShotUpdated(shot), flowHoldDriver);
+  registerShotRoutes(app, client, shotRepo, recorder, beanRepo, profileRepo, scriptRepo, bestBrewRepo, (shot) => hub.broadcastShotUpdated(shot), flowHoldDriver, settingsRepo);
   registerSettingsRoutes(app, settingsRepo);
   registerBeanRoutes(app, beanRepo, coffeeRepo, settingsRepo);
   registerCoffeeRoutes(app, coffeeRepo, beanRepo, bestBrewRepo);
   registerGrinderRoutes(app, grinderRepo);
+  registerBasketRoutes(app, basketRepo);
+  registerNetworkRoutes(app, shotRepo);
   registerMaintenanceRoutes(app, settingsRepo, maintenanceLog);
   registerBestBrewRoutes(app, bestBrewRepo);
   registerDriveRoutes(

@@ -27,8 +27,8 @@ export interface UseProfilesReturn {
   createProfile: (data: ProfileCreate) => Promise<Profile>;
   updateProfile: (id: number, patch: ProfileUpdate) => Promise<Profile>;
   deleteProfile: (id: number) => Promise<void>;
-  /** Reorders favorites. ids must contain only favorite profile IDs. */
-  reorderFavorites: (ids: number[]) => Promise<void>;
+  /** Saves the list order (drag & drop): all profile IDs in display order. */
+  reorderProfiles: (ids: number[]) => Promise<void>;
 }
 
 export function useProfiles(): UseProfilesReturn {
@@ -94,8 +94,8 @@ export function useProfiles(): UseProfilesReturn {
     await refresh();
   }, [refresh]);
 
-  const reorderFavorites = useCallback(async (ids: number[]): Promise<void> => {
-    await apiFetch<{ ok: true }>("/api/profiles/favorites/order", {
+  const reorderProfiles = useCallback(async (ids: number[]): Promise<void> => {
+    await apiFetch<{ ok: true }>("/api/profiles/order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
@@ -103,5 +103,5 @@ export function useProfiles(): UseProfilesReturn {
     await refresh();
   }, [refresh]);
 
-  return { profiles, loading, error, refresh, createProfile, updateProfile, deleteProfile, reorderFavorites };
+  return { profiles, loading, error, refresh, createProfile, updateProfile, deleteProfile, reorderProfiles };
 }

@@ -15,9 +15,13 @@ import { Menu, Power, Octagon } from "lucide-react";
 import { SteamIcon } from "./components/icons/SteamIcon.js";
 import { useXeniaFrame } from "./hooks/useXeniaFrame.js";
 import { canStartShotNow, startBlockedReason } from "./lib/shotReadiness.js";
+import { formatRoastDate } from "./lib/dates.js";
 import { useBreakpoint } from "./hooks/useBreakpoint.js";
 import { useMachineControl } from "./hooks/useMachineControl.js";
 import { useProfiles } from "./hooks/useProfiles.js";
+import { useBaskets, basketName } from "./hooks/useBaskets.js";
+import type { ShotFilters } from "./hooks/useShots.js";
+import { useNavigation, NavGuardContext } from "./hooks/useNavigation.js";
 import { useBackflush } from "./hooks/useBackflush.js";
 import { useScripts } from "./hooks/useScripts.js";
 import { useShotExecute } from "./hooks/useShotExecute.js";
@@ -29,10 +33,10 @@ import { Sidebar, STATE_CONFIG } from "./components/Sidebar.js";
 import type { ViewId } from "./components/Sidebar.js";
 import { SetpointModal } from "./components/SetpointModal.js";
 import { MachineErrorLine } from "./components/MachineErrorLine.js";
-import { ShotSizePicker } from "./components/ShotSizePicker.js";
 import { PreShotDialog } from "./components/PreShotDialog.js";
 import { BackflushConfirmModal } from "./components/BackflushConfirmModal.js";
-import type { PreShotInitialValues, PreShotPayload } from "./components/PreShotDialog.js";
+import type { PreShotInitialValues, PreShotPayload, StartChoice } from "./components/PreShotDialog.js";
+import { startVariants, effectiveVariant, variantRunsInApp, variantForSlot } from "@shared/profile-slots.js";
 import { RatingModal } from "./components/RatingModal.js";
 import { ratingValuesToPatch } from "./components/RatingScreen.js";
 import { useStockAlert } from "./hooks/useStockAlert.js";
@@ -42,9 +46,7 @@ import { Profiles } from "./views/Profiles.js";
 import { Settings } from "./views/Settings.js";
 import { Beans } from "./views/Beans.js";
 import { History } from "./views/History.js";
-import { Scripts } from "./views/Scripts.js";
-import type { MachineState, Profile, ShotSize, RecentShot, Shot } from "@shared/types";
-import { effectiveCategory } from "@shared/bbw-arming.js";
+import type { MachineState, Profile, RecentShot, Shot } from "@shared/types";
 import theme, { alpha } from './theme';
 const C = theme;
 
@@ -53,7 +55,7 @@ const C = theme;
 // to yieldTargetOverrideG. Returns an error message, or null on success.
 async function startDrive(
   profileId: number,
-  shotSize: ShotSize,
+  choice: StartChoice,
   payload: PreShotPayload,
 ): Promise<string | null> {
   try {
@@ -62,7 +64,9 @@ async function startDrive(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         profileId,
-        shotSize,
+        shotSize: choice.shotSize,
+        variantId: choice.variant.id,
+        basketId: choice.basketId,
         yieldTargetOverrideG: payload.yieldTargetOverrideG,
         beanId: payload.beanId,
         beanLabel: payload.beanLabel,
@@ -128,12 +132,10 @@ function isReviewed(shot: Shot): boolean {
   );
 }
 
-/** "09. Jun." — Röstdatum im Aufgebraucht-Hinweis; leer, wenn keins gepflegt ist. */
+/** "(9. Jun. 2026)" — Röstdatum im Aufgebraucht-Hinweis; leer, wenn keins gepflegt ist. */
 function fmtBagDate(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return `(${new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "short" }).format(d)})`;
+  const d = iso ? formatRoastDate(iso) : "";
+  return d ? `(${d})` : "";
 }
 
 function fmtRest(g: number | null): string {
@@ -147,22 +149,29 @@ export default function App() {
   const breakpoint = useBreakpoint();
   const control = useMachineControl();
 
-  const [activeView, setActiveView] = useState<ViewId>("dashboard");
+  // Rueckweg: der Ort (Ansicht, offener Editor, Sorte, Historie) steht im
+  // Browser-Verlauf — Zurueck fuehrt immer dorthin, wo man vorher war.
+  const nav = useNavigation();
+  const { loc } = nav;
+  const activeView = loc.view;
   const [gaugeModal, setGaugeModal] = useState<GaugeTarget | null>(null);
-  // Sprung aus der History-Detailansicht in den Editor eines Profils.
-  const [profilesInitialId, setProfilesInitialId] = useState<number | null>(null);
-  const [pickerProfile, setPickerProfile] = useState<Profile | null>(null);
-  // Pre-shot dialog: set after the shot size is picked, cleared on start/cancel.
-  // initialValues is set only for the "repeat" flow (from a recent-shot card).
+  // Pre-shot dialog: opened by every start path, cleared on start/cancel.
+  // initialValues is set only for the "repeat" flow (from a recent-shot card);
+  // suggest for the dashboard chip (variant and sieve as with the last shot of the profile).
   const [preShot, setPreShot] = useState<{
     profile: Profile;
-    shotSize: ShotSize;
+    /** null = die erste Variante (oder vom Chip: die zuletzt benutzte). */
+    variantId: number | null;
+    basketId?: number | null;
+    suggest?: boolean;
     initialValues?: PreShotInitialValues;
+    /** Start aus der Sorten-Ansicht: diese Roestung vorwaehlen. */
+    beanId?: number | null;
   } | null>(null);
   // Backflush safety prompt: holds the pending run until the drip tray is confirmed empty.
   const [backflushConfirm, setBackflushConfirm] = useState<{
     profile: Profile;
-    shotSize: ShotSize;
+    variantId: number | null;
   } | null>(null);
   // Post-shot review: opens automatically once when a shot ends. The ref tracks
   // which shot was already offered, so skipping/saving doesn't re-open it.
@@ -173,46 +182,35 @@ export default function App() {
   // F-T6: bumped after a rating save so the dashboard refetches its recent
   // shots immediately (the rating otherwise only appears after a view switch).
   const [recentRefreshKey, setRecentRefreshKey] = useState(0);
-  // F-B7: a roasting (bean) id to pre-filter the History view with, set when a
-  // roasting row is tapped in the Beans view (cleared by History on demand).
-  const [historyInitialBeanId, setHistoryInitialBeanId] = useState<number | null>(null);
-  // BB-a: a shot id to open the History detail on, set when the Best-Brew
-  // reference on a Sorte card is tapped (cleared by History once applied).
-  const [historyInitialShotId, setHistoryInitialShotId] = useState<number | null>(null);
-  // SD-1: Beans selected-coffee is owned here so the detail survives the trip to
-  // the filtered History and back. `historyFromBeans` toggles the History "back
-  // to Sorte" affordance.
-  const [beansSelectedId, setBeansSelectedId] = useState<number | null>(null);
-  const [historyFromBeans, setHistoryFromBeans] = useState(false);
-  // SE-2b: deep-link into the Scripts viewer (general list or a profile's script).
-  const [scriptsInitialId, setScriptsInitialId] = useState<number | null>(null);
-  const openHistoryForRoasting = useCallback((beanId: number, coffeeId: number) => {
-    setHistoryInitialBeanId(beanId);
-    setBeansSelectedId(coffeeId);
-    setHistoryFromBeans(true);
-    setActiveView("history");
-  }, []);
-  const openHistoryForShot = useCallback((shotId: number, coffeeId: number) => {
-    setHistoryInitialShotId(shotId);
-    setBeansSelectedId(coffeeId);
-    setHistoryFromBeans(true);
-    setActiveView("history");
-  }, []);
-  const openScript = useCallback((scriptId?: number) => {
-    setScriptsInitialId(scriptId ?? null);
-    setHistoryFromBeans(false);
-    setActiveView("scripts");
-  }, []);
+  // Spruenge zwischen den Ansichten — jeder ist ein Eintrag im Verlauf; die
+  // Historie zeigt dann ihren Zurueck-Knopf.
+  const openHistoryForRoasting = useCallback((beanId: number) => {
+    nav.go({ view: "history", jump: true, history: { beanId } });
+  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openHistoryForShot = useCallback((shotId: number) => {
+    nav.go({ view: "history", jump: true, history: { shotId } });
+  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openHistoryForProfile = useCallback((profileId: number) => {
+    nav.go({ view: "history", jump: true, history: { profileId } });
+  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Schnitt 4: Spruenge aus dem Netz Profil ↔ Bohne — Historie mit Filtern, Sorte.
+  const openHistoryWith = useCallback((filters: Partial<ShotFilters>) => {
+    nav.go({ view: "history", jump: true, history: { filters } });
+  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openCoffee = useCallback((coffeeId: number) => {
+    nav.go({ view: "beans", coffeeId });
+  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
   const openProfile = useCallback((profileId: number) => {
-    setProfilesInitialId(profileId);
-    setHistoryFromBeans(false);
-    setActiveView("profiles");
-  }, []);
-  // Manual nav (sidebar/drawer): clear the Beans→History back affordance.
+    nav.go({ view: "profiles", editor: profileId });
+  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Hauptmenue: neuer Eintrag (bei ungespeicherten Aenderungen erst fragen).
   const handleNavigate = useCallback((v: ViewId) => {
-    setHistoryFromBeans(false);
-    setActiveView(v);
-  }, []);
+    nav.guarded(() => nav.go({ view: v }));
+  }, [nav.guarded, nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Nach dem Start eines Bezugs aufs Dashboard — ohne Doppel-Eintrag.
+  const toDashboard = useCallback(() => {
+    if (loc.view !== "dashboard") nav.go({ view: "dashboard" });
+  }, [loc.view, nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
   // Mobile navigation drawer (mobile breakpoint only — tablet/desktop show the
   // sidebar permanently).
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -229,22 +227,16 @@ export default function App() {
     return breakpoint === "tablet";
   });
 
-  const { profiles, createProfile, updateProfile, deleteProfile, reorderFavorites, refresh: refreshProfiles } = useProfiles();
+  const { profiles, createProfile, updateProfile, deleteProfile, reorderProfiles, refresh: refreshProfiles } = useProfiles();
+  const { baskets } = useBaskets();
   const backflush = useBackflush();
   // Rückspül-Reminder: a profile whose script is one of the "counts-as-backflush"
   // scripts → enables the one-tap "Jetzt rückspülen" in the banner.
   const backflushRunProfile = useMemo(() => {
-    const ids = backflush.status?.scriptIds ?? [];
-    if (ids.length === 0) return null;
-    return (
-      profiles.find(
-        (p) =>
-          (p.scriptIdSingle !== null && ids.includes(p.scriptIdSingle)) ||
-          (p.scriptIdDouble !== null && ids.includes(p.scriptIdDouble)),
-      ) ?? null
-    );
-  }, [backflush.status?.scriptIds, profiles]);
-  const { scripts, syncScripts } = useScripts();
+    const ids = backflush.status?.profileIds ?? [];
+    return profiles.find((p) => ids.includes(p.id)) ?? null;
+  }, [backflush.status?.profileIds, profiles]);
+  const { scripts, syncScripts, refreshList: refreshScriptList, deleteScript, createScript, updateScript } = useScripts();
   const [scriptsSyncing, setScriptsSyncing] = useState(false);
   const handleEditorOpen = useCallback(() => {
     setScriptsSyncing(true);
@@ -273,45 +265,37 @@ export default function App() {
     [profiles],
   );
 
-  const runMaintenance = useCallback((profile: Profile, shotSize: ShotSize) => {
+  const runMaintenance = useCallback((profile: Profile, variantId: number | null) => {
     setBackflushConfirm(null);
-    void shotExecute.execute({ profileId: profile.id, shotSize }).then((err) => {
-      if (!err) handleNavigate("dashboard");
+    void shotExecute.execute({ profileId: profile.id, shotSize: "single", variantId }).then((err) => {
+      if (!err) toDashboard();
     });
-  }, [shotExecute, handleNavigate]);
+  }, [shotExecute, toDashboard]);
 
   // Picking a shot size no longer starts the brew directly — it opens the
   // pre-shot dialog, which collects bean/grinder/dose and then executes.
-  const handleExecute = useCallback((profile: Profile, shotSize: ShotSize) => {
-    setPickerProfile(null);
-    // ÄW-B: maintenance scripts extract no coffee — no yield, no review. Skip the
-    // pre-shot dialog and execute directly. Category from the script's
-    // effectiveCategory (respects category_override); brew is unchanged.
-    const scriptId = shotSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble;
-    const script = scriptId != null ? scripts.find((s) => s.id === scriptId) : undefined;
-    const isMaintenance =
-      script != null &&
-      effectiveCategory({ categoryAuto: script.categoryAuto, categoryOverride: script.categoryOverride }) ===
-        "maintenance";
-    if (isMaintenance) {
+  const handleExecute = useCallback((profile: Profile, variantId: number | null) => {
+    // ÄW-B: maintenance extracts no coffee — no yield, no review. Skip the
+    // pre-shot dialog and execute directly. Schnitt 3: das sagt die Art des Profils.
+    const variant = (variantId !== null ? profile.variants?.find((v) => v.id === variantId) : undefined) ?? startVariants(profile)[0];
+    if (profile.kind === "maintenance") {
       // A backflush rinses several times into the drip tray — confirm it was
       // emptied first, otherwise it overflows onto the counter.
-      if (scriptId !== null && (backflush.status?.scriptIds ?? []).includes(scriptId)) {
-        setBackflushConfirm({ profile, shotSize });
+      if ((backflush.status?.profileIds ?? []).includes(profile.id)) {
+        setBackflushConfirm({ profile, variantId: variant?.id ?? null });
         return;
       }
-      runMaintenance(profile, shotSize);
+      runMaintenance(profile, variant?.id ?? null);
       return;
     }
-    setPreShot({ profile, shotSize });
-  }, [scripts, backflush.status?.scriptIds, runMaintenance]);
+    setPreShot({ profile, variantId: variant?.id ?? null });
+  }, [backflush.status?.profileIds, runMaintenance]);
 
   // Flow-hold drive: a profile with brewSteps runs the app-side paddle-driven
   // flow controller instead of a Xenia script. Same pre-shot dialog collects
   // bean/grinder/dose; onStart routes to the drive API by inspecting brewSteps.
-  const handleExecuteDrive = useCallback((profile: Profile, shotSize: ShotSize) => {
-    setPickerProfile(null);
-    setPreShot({ profile, shotSize });
+  const handleExecuteDrive = useCallback((profile: Profile, variantId: number | null) => {
+    setPreShot({ profile, variantId });
   }, []);
 
   // The one stop the UI knows (header button and dashboard both call it). A
@@ -341,7 +325,8 @@ export default function App() {
   useEffect(() => {
     if (lastEndedShot && lastEndedShot.id !== reviewedShotIdRef.current) {
       reviewedShotIdRef.current = lastEndedShot.id;
-      setReviewShot(lastEndedShot);
+      // Ein Messlauf bekommt keine Bewertung — er misst die Maschine, nicht den Kaffee.
+      if (lastEndedShot.category !== "test") setReviewShot(lastEndedShot);
       // Frozen-scale: audible tablet alert (best-effort) alongside the post-shot
       // notice banner — the machine can't beep during a brew.
       if (lastEndedShot.scaleFrozen || lastEndedShot.scaleLost) playAlertBeep();
@@ -431,15 +416,19 @@ export default function App() {
   // the structural subset shared by RecentShot (dashboard) and ShotListItem
   // (history list), so both repeat entry points reuse this exact prefill path.
   const handleRepeat = useCallback((shot: Pick<RecentShot,
-    "profileId" | "shotSize" | "beanId" | "beanLabel" | "grinderId" | "grindSetting" | "grinderRpm" | "doseG" | "yieldTargetG">) => {
+    "profileId" | "shotSize" | "variantId" | "basketId" | "beanId" | "beanLabel" | "grinderId" | "grindSetting" | "grinderRpm" | "doseG" | "yieldTargetG">) => {
     if (startBlocked !== null) { control.reportError(startBlocked); return; }
     const profile = profiles.find((p) => p.id === shot.profileId);
     if (!profile) return;
     // UP-1: carry the source shot's yield target as an override, but ONLY when it
     // differs from the CURRENT profile default for that size — so a default brew
     // doesn't get a bogus "geändert" marker, while a real override is reproduced.
-    const profileDefault =
-      shot.shotSize === "single" ? profile.yieldTargetSingleG : profile.yieldTargetDoubleG;
+    // Variante und Sieb des Quellbezugs; aeltere Bezuege ohne Variante ueber ihren 1×/2×-Platz.
+    const variant = (shot.variantId != null ? profile.variants?.find((v) => v.id === shot.variantId) : undefined)
+      ?? variantForSlot(profile, shot.shotSize);
+    const profileDefault = variant
+      ? variant.yieldG
+      : shot.shotSize === "single" ? profile.yieldTargetSingleG : profile.yieldTargetDoubleG;
     const sourceTarget = shot.yieldTargetG ?? null;
     const prefillOverride =
       sourceTarget !== null && profileDefault !== null && sourceTarget !== profileDefault
@@ -447,7 +436,8 @@ export default function App() {
         : null;
     setPreShot({
       profile,
-      shotSize: shot.shotSize,
+      variantId: variant?.id ?? null,
+      basketId: shot.basketId ?? null,
       initialValues: {
         beanId: shot.beanId,
         beanLabel: shot.beanLabel,
@@ -469,15 +459,25 @@ export default function App() {
 
   const isMobile = breakpoint === "mobile";
   const isBrewing = activeShot !== null;
+
+  // Profilliste: neue oder an der Maschine geloeschte Skripte fallen beim Oeffnen
+  // auf (frueher machte das die Skriptliste). Nie waehrend eines Bezugs oder
+  // einer Wartung — dann soll die Maschine keine Listen liefern muessen.
+  useEffect(() => {
+    if (activeView !== "profiles" || isBrewing || maintenance) return;
+    void refreshScriptList().catch(() => { /* Abgleich ist Komfort, kein Muss */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView]);
   // Profiles start buttons use the same central guard.
   const canStartShot = canStartBrew;
   const isMachineOff =
     displayState === "off" || displayState === "disconnected";
+  const navGuardCtx = useMemo(() => ({ setLeaveGuard: nav.setLeaveGuard }), [nav.setLeaveGuard]);
   const steamOn = frame?.steamBoilerStatus === 2;
   const controlDisabled = displayState === "disconnected" || control.isLoading;
 
   return (
-    <>
+    <NavGuardContext.Provider value={navGuardCtx}>
       {/* Pulse keyframe for status dot and brewing state */}
       <style>{`
         @keyframes xenia-pulse {
@@ -680,7 +680,13 @@ export default function App() {
                   // den Vorbereitungsdialog. Ohne diese Zeile wuerde er sich im
                   // Nachlauf oeffnen und erst beim Starten scheitern.
                   if (startBlocked) { control.reportError(startBlocked); return; }
-                  setPickerProfile(p);
+                  // Direkt in den Vorbereitungsdialog — Einzel/Doppel waehlt man
+                  // dort. Wartungsprofile laufen wie bisher ohne Dialog.
+                  if (p.kind === "maintenance") {
+                    handleExecute(p, null);
+                    return;
+                  }
+                  setPreShot({ profile: p, variantId: null, suggest: true });
                 }}
                 mobile={isMobile}
                 activeShot={activeShot}
@@ -689,7 +695,7 @@ export default function App() {
                 maintenance={maintenance}
                 maintenanceDone={
                   maintenanceDone !== null &&
-                  (backflush.status?.scriptIds ?? []).includes(maintenanceDone.scriptId)
+                  (backflush.status?.profileIds ?? []).includes(maintenanceDone.profileId)
                     ? maintenanceDone
                     : null
                 }
@@ -704,7 +710,7 @@ export default function App() {
                 backflushCanRun={backflushRunProfile !== null}
                 onBackflushRun={() => {
                   if (!backflushRunProfile) return;
-                  handleExecute(backflushRunProfile, "single");
+                  handleExecute(backflushRunProfile, null);
                   // The run logs itself at MA_STATUS 1→3; refetch shortly after.
                   setTimeout(() => { void backflush.refetch(); }, 4000);
                 }}
@@ -719,7 +725,7 @@ export default function App() {
               <Profiles
                 profiles={profiles}
                 scripts={scripts}
-                profileActions={{ createProfile, updateProfile, deleteProfile, reorderFavorites }}
+                profileActions={{ createProfile, updateProfile, deleteProfile, reorderProfiles }}
                 onExecute={handleExecute}
                 onExecuteDrive={handleExecuteDrive}
                 canStartShot={canStartShot}
@@ -727,9 +733,14 @@ export default function App() {
                 mobile={isMobile}
                 scriptsSyncing={scriptsSyncing}
                 onEditorOpen={handleEditorOpen}
-                onOpenScript={openScript}
-                initialProfileId={profilesInitialId}
-                onInitialApplied={() => setProfilesInitialId(null)}
+                onOpenHistory={openHistoryForProfile}
+                onOpenHistoryWith={openHistoryWith}
+                onOpenCoffee={openCoffee}
+                onDeleteScript={deleteScript}
+                scriptActions={{ createScript, updateScript, deleteScript }}
+                editorId={loc.editor ?? null}
+                onOpenEditor={(id) => nav.go({ view: "profiles", editor: id })}
+                onCloseEditor={() => nav.back({ view: "profiles" }, { force: true })}
               />
             )}
             {activeView === "settings" && (
@@ -740,20 +751,23 @@ export default function App() {
                 connectionState={connectionState}
               />
             )}
-            {activeView === "scripts" && (
-              <Scripts
-                mobile={isMobile}
-                initialScriptId={scriptsInitialId}
-                onInitialApplied={() => setScriptsInitialId(null)}
-              />
-            )}
             {activeView === "beans" && (
               <Beans
                 mobile={isMobile}
                 onOpenHistory={openHistoryForRoasting}
                 onOpenShot={openHistoryForShot}
-                selectedId={beansSelectedId}
-                onSelectId={setBeansSelectedId}
+                selectedId={loc.coffeeId ?? null}
+                onSelectId={(id) => (id !== null ? nav.go({ view: "beans", coffeeId: id }) : nav.replace({ view: "beans" }))}
+                onBack={() => nav.back({ view: "beans" })}
+                network={{
+                  profiles,
+                  onStart: (p, variantId, basketId, beanId) => {
+                    if (startBlocked) { control.reportError(startBlocked); return; }
+                    setPreShot({ profile: p, variantId, basketId, beanId });
+                  },
+                  onOpenHistory: openHistoryWith,
+                  onOpenProfile: openProfile,
+                }}
               />
             )}
             {activeView === "history" && (
@@ -762,11 +776,12 @@ export default function App() {
                 isBrewing={isBrewing}
                 canStartBrew={canStartBrew}
                 onRepeat={handleRepeat}
-                initialBeanId={historyInitialBeanId}
-                onInitialBeanApplied={() => setHistoryInitialBeanId(null)}
-                initialShotId={historyInitialShotId}
-                onInitialShotApplied={() => setHistoryInitialShotId(null)}
-                onBack={historyFromBeans ? () => setActiveView("beans") : undefined}
+                initialBeanId={loc.history?.beanId ?? null}
+                initialProfileId={loc.history?.profileId ?? null}
+                initialFilters={loc.history?.filters ?? null}
+                initialShotId={loc.history?.shotId ?? null}
+                onLocationState={(st) => nav.stash({ history: st })}
+                onBack={loc.jump ? () => nav.back({ view: "history" }) : undefined}
                 onOpenProfile={openProfile}
               />
             )}
@@ -774,8 +789,7 @@ export default function App() {
               activeView !== "profiles" &&
               activeView !== "settings" &&
               activeView !== "beans" &&
-              activeView !== "history" &&
-              activeView !== "scripts" && (
+              activeView !== "history" && (
               <div
                 style={{
                   color: C.mut,
@@ -829,46 +843,34 @@ export default function App() {
           </>
         )}
 
-        {/* Shot size picker overlay (from Dashboard pill tap) */}
-        {pickerProfile && (
-          <ShotSizePicker
-            profile={pickerProfile}
-            onExecute={handleExecute}
-            onClose={() => setPickerProfile(null)}
-          />
-        )}
-
         {/* Pre-shot dialog — collects bean/grinder/dose, then executes */}
         {preShot && (
           <PreShotDialog
             profile={preShot.profile}
-            shotSize={preShot.shotSize}
-            hasCmd27={
-              scripts.find(
-                (s) =>
-                  s.id ===
-                  (preShot.shotSize === "single"
-                    ? preShot.profile.scriptIdSingle
-                    : preShot.profile.scriptIdDouble),
-              )?.hasCmd27 ?? false
+            variantId={preShot.variantId}
+            basketId={preShot.basketId}
+            beanId={preShot.beanId}
+            suggest={preShot.suggest}
+            hasCmd27For={(v) =>
+              scripts.find((s) => s.id === effectiveVariant(preShot.profile, v).scriptId)?.hasCmd27 ?? false
             }
             initialValues={preShot.initialValues}
-            onStart={async (payload) => {
-              // A profile carrying a step sequence (brewSteps) runs the app-side
-              // flow-hold drive; everything else runs its Xenia script. Keyed on
-              // the profile so EVERY entry (repeat, fav chip, picker, Flow button)
-              // routes correctly — not just the dedicated Flow button.
-              const err = preShot.profile.brewSteps != null
-                ? await startDrive(preShot.profile.id, preShot.shotSize, payload)
+            onStart={async (payload, choice) => {
+              // Die Variante entscheidet: Stufen laufen im App-Antrieb, ein Skript
+              // an der Maschine. Gilt fuer JEDEN Einstieg (Wiederholen, Chip, Liste).
+              const err = variantRunsInApp(preShot.profile, choice.variant)
+                ? await startDrive(preShot.profile.id, choice, payload)
                 : await shotExecute.execute({
                     profileId: preShot.profile.id,
-                    shotSize: preShot.shotSize,
+                    shotSize: choice.shotSize,
+                    variantId: choice.variant.id,
+                    basketId: choice.basketId,
                     ...payload,
                   });
               // On a successful start, always jump to the Dashboard so the live
               // brew is visible — regardless of which view the start came from
               // (History row-↻, History detail, Profiles 1×/2×, fav chip, …).
-              if (!err) handleNavigate("dashboard");
+              if (!err) toDashboard();
               return err;
             }}
             onClose={() => { setPreShot(null); }}
@@ -881,7 +883,7 @@ export default function App() {
 
         {backflushConfirm && (
           <BackflushConfirmModal
-            onConfirm={() => { runMaintenance(backflushConfirm.profile, backflushConfirm.shotSize); }}
+            onConfirm={() => { runMaintenance(backflushConfirm.profile, backflushConfirm.variantId); }}
             onClose={() => { setBackflushConfirm(null); }}
           />
         )}
@@ -912,6 +914,7 @@ export default function App() {
         {/* Post-shot review — auto-opens once per ended shot, fully skippable */}
         {reviewShot && (
           <RatingModal
+            shotId={reviewShot.id}
             initial={{
               rating: reviewShot.rating ?? null,
               acidity: reviewShot.acidity ?? null,
@@ -923,9 +926,11 @@ export default function App() {
               tasteTags: reviewShot.tasteTags ?? [],
               grindNote: reviewShot.grindNote ?? null,
               notes: reviewShot.notes ?? "",
+              vsPrev: reviewShot.vsPrev ?? null,
+              vsPrevShotId: reviewShot.vsPrevShotId ?? null,
             }}
             headerLabel={
-              `${reviewShot.shotSize === "single" ? "1×" : "2×"}` +
+              `${basketName(baskets, reviewShot.basketId) ?? (reviewShot.shotSize === "single" ? "1×" : "2×")}` +
               (reviewShot.yieldActualG !== null ? ` · ${reviewShot.yieldActualG.toFixed(1)} g` : "") +
               // UP-2: target yield in parentheses (history-mono format), when present.
               (reviewShot.yieldTargetG !== null
@@ -993,6 +998,6 @@ export default function App() {
           />
         )}
       </div>
-    </>
+    </NavGuardContext.Provider>
   );
 }

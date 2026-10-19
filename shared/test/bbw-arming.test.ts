@@ -1,59 +1,38 @@
 /**
- * Unit tests for the BBW arming category gate (Spec §4.12 / Auftrag 3m).
+ * Unit tests for the BBW arming gate (Spec §4.12 / Auftrag 3m).
  *
  * Runner: node:test (NOT vitest) — run with `node --import tsx --test`.
- * Pins the pure decision: only a genuine `brew` script arms the app BBW stop;
- * maintenance, unknown and null (uncategorized) must NOT arm — so a flush
- * "overshoot" can never poison residual_lag auto-calibration.
+ * Seit Schnitt 3 sagt das Profil, ob es ein Bezug ist; das Skript nur, ob es
+ * die Pumpe ansteuert. Nur ein Bezug mit Pumpe schaltet den App-Stopp scharf —
+ * so kann ein Spuellauf das Nachlauf-Lernen (residual_lag) nie verfaelschen.
+ * Die Skript-Kategorie schlaegt nur noch die Art vor (Uebersteuerung vor Automatik).
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  effectiveCategory,
-  categoryArmsBbw,
-  type ScriptCategoryAuto,
-} from "../src/bbw-arming.js";
+import { effectiveCategory, profileArmsBbw } from "../src/bbw-arming.js";
 
-/** Convenience: the full gate as the recorder applies it. */
-function arms(categoryAuto: ScriptCategoryAuto): boolean {
-  return categoryArmsBbw(effectiveCategory({ categoryAuto }));
-}
-
-test("brew script arms BBW", () => {
-  assert.equal(arms("brew"), true);
+test("Bezug mit Pumpe schaltet BBW scharf", () => {
+  assert.equal(profileArmsBbw({ kind: "brew", hasPumpAction: true }), true);
 });
 
-test("maintenance script does NOT arm BBW", () => {
-  assert.equal(arms("maintenance"), false);
+test("Wartung schaltet BBW nie scharf — auch mit Pumpe (Rueckspuelen pumpt)", () => {
+  assert.equal(profileArmsBbw({ kind: "maintenance", hasPumpAction: true }), false);
+  assert.equal(profileArmsBbw({ kind: "maintenance", hasPumpAction: false }), false);
 });
 
-test("unknown script does NOT arm BBW", () => {
-  assert.equal(arms("unknown"), false);
+test("Messlauf verhaelt sich wie ein Bezug: mit Pumpe scharf, ohne nicht", () => {
+  assert.equal(profileArmsBbw({ kind: "test", hasPumpAction: true }), true);
+  assert.equal(profileArmsBbw({ kind: "test", hasPumpAction: false }), false);
 });
 
-test("uncategorized (null) does NOT arm BBW", () => {
-  assert.equal(arms(null), false);
+test("Bezug ohne Pumpe schaltet nicht scharf — das Profil allein reicht nicht", () => {
+  assert.equal(profileArmsBbw({ kind: "brew", hasPumpAction: false }), false);
 });
 
-test("null/unknown collapse to the same effective category", () => {
+test("Skript-Kategorie: null/unknown fallen zusammen, Uebersteuerung vor Automatik", () => {
   assert.equal(effectiveCategory({ categoryAuto: null }), "unknown");
   assert.equal(effectiveCategory({ categoryAuto: "unknown" }), "unknown");
-});
-
-test("override slot wins over auto (reserved for SE-2)", () => {
-  // A future manual override pinning 'brew' arms even if auto says maintenance…
-  assert.equal(
-    categoryArmsBbw(
-      effectiveCategory({ categoryAuto: "maintenance", categoryOverride: "brew" }),
-    ),
-    true,
-  );
-  // …and pinning 'maintenance' blocks even if auto says brew.
-  assert.equal(
-    categoryArmsBbw(
-      effectiveCategory({ categoryAuto: "brew", categoryOverride: "maintenance" }),
-    ),
-    false,
-  );
+  assert.equal(effectiveCategory({ categoryAuto: "maintenance", categoryOverride: "brew" }), "brew");
+  assert.equal(effectiveCategory({ categoryAuto: "brew", categoryOverride: "maintenance" }), "maintenance");
 });

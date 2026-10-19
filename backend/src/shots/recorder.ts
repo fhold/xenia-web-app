@@ -36,11 +36,7 @@ import {
 } from "../../../shared/src/brew-watchdog.js";
 import { trackScaleStall, initialScaleStallState, type ScaleStallState } from "../../../shared/src/scale-stall.js";
 import { plausibleScaleWeight, postBrewDisturbance } from "../../../shared/src/scale-plausibility.js";
-import {
-  effectiveCategory,
-  categoryArmsBbw,
-  type ScriptCategoryAuto,
-} from "../../../shared/src/bbw-arming.js";
+import { profileArmsBbw } from "../../../shared/src/bbw-arming.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,21 +54,24 @@ const ENDING_STATUSES = new Set([1, 4]); // ON (returned to idle) or DRAINING
 
 export interface ArmArgs {
   profileId: number;
+  /** Schnitt 3d: gelaufene Variante und benutztes Sieb — landen im Bezug. */
+  variantId?: number | null;
+  basketId?: number | null;
   /** §3.4 T5: profile name snapshot at brew time (null if no profile). */
   profileName: string | null;
   /** null for app-driven step-based brews (Cut-2). */
   scriptId: number | null;
   shotSize: ShotSize;
-  /** Derived from script.categoryAuto; 'unknown' callers default to 'brew'. */
+  /**
+   * Schnitt 3: die Art des Profils. Wartung wird nicht aufgezeichnet (ÄW-B) und
+   * schaltet BBW nie scharf (§4.12).
+   */
   category: ShotCategory;
   /**
-   * Raw auto-detected category (pre-collapse) for the BBW arming gate (§4.12).
-   * Unlike `category`, this keeps 'unknown'/null distinguishable — the gate must
-   * NOT arm for maintenance/unknown, only for genuine 'brew' scripts.
+   * Das Skript steuert die Pumpe an (Cmd 3/4). Ohne kann es kein Bezug sein —
+   * BBW bleibt dann aus, auch wenn das Profil Bezug sagt.
    */
-  categoryAuto: ScriptCategoryAuto;
-  /** SE-2: manual category override from xenia_script (local). null = use auto. */
-  categoryOverride: "brew" | "maintenance" | null;
+  hasPumpAction: boolean;
   hasCmd27: boolean;
   cmd27Value: number | null;
   yieldTargetG: number | null;
@@ -313,12 +312,8 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
     const token = ++this.armTokenSeq;
     this.armed = { ...args, armedAt: Date.now(), token };
     // ÄW-B: app-initiated maintenance run → suppress the next shot record.
-    // Uses effectiveCategory (respects category_override), not raw categoryAuto.
-    this.pendingMaintenanceRun =
-      effectiveCategory({
-        categoryAuto: args.categoryAuto,
-        categoryOverride: args.categoryOverride,
-      }) === "maintenance";
+    // Schnitt 3: das sagt die Art des Profils.
+    this.pendingMaintenanceRun = args.category === "maintenance";
     this.logger.info(
       {
         tag: "recorder",
@@ -650,6 +645,8 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
     const startedAt = Date.now();
     const id = this.repo.createShot({
       profileId: armed.profileId,
+      variantId: armed.variantId ?? null,
+      basketId: armed.basketId ?? null,
       profileName: armed.profileName,
       profileSetTempC: this.lastSetpoints?.brewGroupTargetC ?? null, // H4 snapshot
       scriptId: armed.scriptId,
@@ -715,20 +712,15 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
     this.postBrewDisturbed = false;   // nur hier zuruecksetzen: finalize liest es noch
     this.postBrew = null;             // Post-Brew-Tracking reset per shot
     // BBW arming. The settings/script conditions (no Cmd27 + yield target + BBW
-    // on) decide IF a weight-stop is wanted; the category gate (§4.12) decides if
-    // it MAY arm — only genuine 'brew' scripts. Maintenance/unknown are blocked
-    // so a non-brew "overshoot" cannot poison residual_lag auto-calibration.
+    // on) decide IF a weight-stop is wanted; the gate (§4.12) decides if it MAY
+    // arm — only a brew profile whose script drives the pump. Anything else is
+    // blocked so a non-brew "overshoot" cannot poison residual_lag auto-calibration.
     const bbwSettingsArm =
       !this.driveMode && // flow-hold drive owns its own stop — never arm BBW here
       !armed.hasCmd27 &&
       armed.yieldTargetG !== null &&
       this.settingsRepo.get("brew_by_weight_active") === "true";
-    const categoryArms = categoryArmsBbw(
-      effectiveCategory({
-        categoryAuto: armed.categoryAuto,
-        categoryOverride: armed.categoryOverride,
-      }),
-    );
+    const categoryArms = profileArmsBbw({ kind: armed.category, hasPumpAction: armed.hasPumpAction });
     if (bbwSettingsArm && categoryArms) {
       const windowMs = Number(this.settingsRepo.get("brew_by_weight_window_ms") ?? "1000");
       const residualLagS = Number(this.settingsRepo.get("brew_by_weight_residual_lag_s") ?? "1.35");
@@ -747,18 +739,18 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
         `BBW active — target=${armed.yieldTargetG}g, window=${windowMs}ms, lag=${residualLagS}s`,
       );
     } else if (bbwSettingsArm && !categoryArms) {
-      // Would have armed, but this is not a genuine brew script → block + log.
+      // Would have armed, but this is not a genuine brew run → block + log.
       // The brew still runs; Cmd27 / firmware cutoff / manual stop remain.
       this.shotLogger.info(
         {
           tag: "bbw",
           event: "arming_blocked_category",
           category: armed.category,
-          category_auto: armed.categoryAuto,
+          has_pump_action: armed.hasPumpAction,
           target_g: armed.yieldTargetG,
         },
-        `BBW arming blocked — non-brew script ` +
-          `(category_auto=${armed.categoryAuto ?? "null"}); app weight-stop will NOT arm`,
+        `BBW arming blocked — ${armed.category === "maintenance" ? "maintenance profile" : "script drives no pump"}; ` +
+          `app weight-stop will NOT arm`,
       );
     }
 
@@ -995,7 +987,8 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
     }
 
     // BBW auto-calibration (BC-parity): if BBW drove this stop, nudge the lag.
-    if (stopMode === "app") {
+    // Messlaeufe zaehlen nirgends — auch nicht fuer das Nachlauf-Lernen.
+    if (stopMode === "app" && cur.category !== "test") {
       this.autoCalibrateBbwLag(cur.id, yieldG);
     }
 

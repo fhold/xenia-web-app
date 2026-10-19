@@ -43,6 +43,11 @@ export class SqliteScriptRepo implements ScriptRepo {
           category_auto, fetched_at, orphaned_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         -- Ein verwaister Platz, den die Maschine neu belegt, traegt ein NEUES
+         -- Skript: die von Hand gesetzte Kategorie des alten verfaellt. (SQLite
+         -- wertet alle Zuweisungen gegen die alte Zeile aus.)
+         category_override = CASE WHEN xenia_script.orphaned_at IS NOT NULL
+                                  THEN NULL ELSE xenia_script.category_override END,
          title         = excluded.title,
          content       = excluded.content,
          parsed_cmds   = excluded.parsed_cmds,
@@ -92,7 +97,8 @@ export class SqliteScriptRepo implements ScriptRepo {
   updateTitle(id: number, title: string): void {
     const db = getDb();
     db.prepare(
-      "UPDATE xenia_script SET title = ?, orphaned_at = NULL, fetched_at = ? WHERE id = ?",
+      // Un-orphan = neues Skript auf dem Platz → alte manuelle Kategorie verfaellt (wie in upsert).
+      "UPDATE xenia_script SET title = ?, category_override = CASE WHEN orphaned_at IS NOT NULL THEN NULL ELSE category_override END, orphaned_at = NULL, fetched_at = ? WHERE id = ?",
     ).run(title, Date.now(), id);
   }
 
@@ -117,12 +123,14 @@ export class SqliteScriptRepo implements ScriptRepo {
       const shotCount = (
         db.prepare("SELECT COUNT(*) as n FROM shot WHERE script_id = ?").get(s.id) as { n: number }
       ).n;
+      // Auch Varianten ab der dritten — die alten Spalten kennen nur die ersten beiden.
       const profileCount = (
         db
           .prepare(
-            "SELECT COUNT(*) as n FROM profile WHERE script_single = ? OR script_double = ?",
+            `SELECT COUNT(*) as n FROM profile p WHERE p.script_single = ? OR p.script_double = ?
+               OR EXISTS (SELECT 1 FROM profile_variant v WHERE v.profile_id = p.id AND v.script_id = ?)`,
           )
-          .get(s.id, s.id) as { n: number }
+          .get(s.id, s.id, s.id) as { n: number }
       ).n;
 
       if (shotCount === 0 && profileCount === 0) {

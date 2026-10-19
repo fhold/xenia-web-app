@@ -168,12 +168,23 @@ export const DEFAULT_FLOW_HOLD_CONFIG: Omit<FlowHoldConfig, "yieldTargetG"> = {
 // ---------------------------------------------------------------------------
 
 const MAX_PLAUSIBLE_FLOW_G_PER_S = 15;
+/** „Fluss uebernehmen“ mittelt den Tassenfluss ueber dieses Fenster (ms) — die
+ *  Waage rauscht einzeln um ±0,1 g/s, das Mittel von ~3 Takten nicht. */
+const ADOPT_WINDOW_MS = 1_000;
 /** Max scale reading (g) that still counts as "zeroed" at drive start. Above
  *  this the scale carries a residual/un-tared value — drive mode has no machine
  *  tare, so we refuse to start rather than feed the loop a false weight. */
 const SCALE_ZERO_TOL_G = 3;
 /** Only re-command the pump when the target power moved at least this much (%). */
 const POWER_SEND_EPS = 1;
+/** Nachsenden: Die Maschine bestaetigt einen Pumpenbefehl gelegentlich, ohne ihn
+ *  zu uebernehmen (#271 25→20 %, #272 60→45 %). Weicht die gemeldete Leistung
+ *  (PU_LEVEL_PW_CONTROL) so lange nach dem letzten Befehl noch mehr als so viele
+ *  Punkte ab, geht derselbe Wert noch einmal raus — hoechstens so oft je Befehl.
+ *  Die Leistung folgt dem Befehl sonst nach ~0,6 s (#254). */
+const RESEND_DEVIATION_PCT = 2;
+const RESEND_AFTER_MS = 1_500;
+const RESEND_MAX = 3;
 
 /** Pressure-step PI gains (power% per bar). Conservative starting points — pressure
  *  responds much faster than flow, so lower gains than the flow loop. Tuned live. */
@@ -200,6 +211,11 @@ export type DrivePhase = "idle" | "hold" | "stopping" | "sb_watch" | "done";
 
 export interface DriveArmArgs {
   profileId: number;
+  /** "test" = Messlauf (aufgezeichnet, zaehlt nirgends); fehlt = Bezug. */
+  category?: "brew" | "test";
+  /** Schnitt 3d: gelaufene Variante und benutztes Sieb (fuer die Aufzeichnung). */
+  variantId?: number | null;
+  basketId?: number | null;
   profileName: string | null;
   /** null for app-driven step-based brews (Cut-2). */
   scriptId: number | null;
@@ -246,20 +262,32 @@ export class FlowHoldDriver {
 
   // Per-step setpoint ramp (flow/pressure rampMs): the active setpoint
   // interpolates linearly from `stageRampFrom` to `stageTarget` over
-  // `stageRampMs`, then holds. lastFlowTarget/lastPressureTarget carry the
-  // previous step's target so a later step of the same kind eases in from it
-  // (Decent-style); they start at 0 so step 0 ramps up from zero.
+  // `stageRampMs`, then holds. Flow and pressure ramps start at the value
+  // MEASURED in the last tick (bumpless after any step kind; step 0 starts
+  // before the first tick, i.e. from 0); a power ramp starts at
+  // lastPowerTarget, which begins at 0 so step 0 ramps up from zero.
   private stageRampFrom = 0;
   private stageTarget = 0;
   private stageRampMs = 0;
   private lastFlowTarget = 0;
-  private lastPressureTarget = 0;
   private lastPowerTarget = 0;
 
   private lastPlausibleWeightG: number | null = null;
   private scaleStall: ScaleStallState = initialScaleStallState();
   private lastPlausibleFlowGs = 0;
+  /** Druck des letzten Takts — Startpunkt einer Druckrampe. */
+  private lastPressureBar = 0;
+  /** Plausibler Tassenfluss der letzten ~1 s — „Fluss uebernehmen“ mittelt darueber. */
+  private recentFlow: { at: number; gs: number }[] = [];
   private lastSentPower: number | null = null;
+  /** Nachsenden: wann der zuletzt bestaetigte Pumpenbefehl rausging, wann zuletzt
+   *  nachgesendet wurde, wie oft schon fuer diesen Befehl, ob das Scheitern schon
+   *  gemeldet ist und ob der wartende Wert ein Nachsenden ist. */
+  private lastSentAt = 0;
+  private lastResendAt = 0;
+  private resendCount = 0;
+  private resendWarned = false;
+  private resendQueued = false;
 
   // K-2: serialized single-writer actuator pipeline. Loop pump writes coalesce to
   // the newest setpoint (at most one in flight); a stop locks the pipeline and
@@ -416,12 +444,13 @@ export class FlowHoldDriver {
     // captured as the shot start (mirrors the execute route ordering).
     this.recorder.armForDrive({
       profileId: arm.profileId,
+      variantId: arm.variantId ?? null,
+      basketId: arm.basketId ?? null,
       profileName: arm.profileName,
       scriptId: arm.scriptId,
       shotSize: arm.shotSize,
-      category: "brew",
-      categoryAuto: "brew",
-      categoryOverride: null,
+      category: arm.category ?? "brew",
+      hasPumpAction: true,
       hasCmd27: false,
       cmd27Value: null,
       yieldTargetG: cfg.yieldTargetG,
@@ -536,6 +565,11 @@ export class FlowHoldDriver {
     const cfg = this.cfg!;
     const dtMs = now - this.lastTickAt;
     const flow = this.plausibleFlow(frame.flowRateGPerS);
+    // Vor dem Stufenwechsel: eine Druckrampe oder ein uebernommener Fluss soll
+    // diesen Takt schon sehen.
+    this.lastPressureBar = frame.pumpPressureBar;
+    this.recentFlow.push({ at: now, gs: flow });
+    while (this.recentFlow.length && this.recentFlow[0]!.at < now - ADOPT_WINDOW_MS) this.recentFlow.shift();
 
     // Staged setpoint: advance to the next step when this step's exit is met.
     this.maybeAdvanceStage(frame, weight, now);
@@ -543,6 +577,7 @@ export class FlowHoldDriver {
     const active = this.steps[this.stageIndex];
     const power = this.computeStepPower(active, frame, flow, dtMs, now);
     this.enqueuePower(power);
+    this.checkPumpReadback(frame, now);
 
     // Normal stop — BBW-style projection on the plausible weight. Suppressed
     // during the start grace (same window the recorder's primary stop uses,
@@ -685,7 +720,8 @@ export class FlowHoldDriver {
       // shot_stage kennt nur flow/pressure/power — die Preinfusion zaehlt als
       // Leistungsstufe; was sie war, steht im Profil-Schnappschuss des Bezugs.
       stepKind: step.kind === "preinfusion" ? "power" : step.kind,
-      targetFlowGs: step.kind === "flow" ? step.targetFlowGs : null,
+      // Bei „Fluss uebernehmen“ der uebernommene Wert, nicht der erwartete.
+      targetFlowGs: step.kind === "flow" ? this.stageTarget : null,
       targetPressureBar: step.kind === "pressure" ? step.targetPressureBar : null,
       targetPower: step.kind === "power" ? step.power : null,
       exitReason: null,
@@ -752,10 +788,13 @@ export class FlowHoldDriver {
         // the flow rang back up (shots 126/127). On a flow→flow step the measured
         // flow equals the previous target anyway, so this stays bumpless there too.
         const measuredFlow = this.lastPlausibleFlowGs;
-        this.stageRampFrom = rampMs > 0 ? measuredFlow : step.targetFlowGs;
-        this.stageTarget = step.targetFlowGs;
+        // Gagne: das Ziel ist der Fluss, den der Puck gerade liefert — Ziel und
+        // Ist sind beim Eintritt gleich, die Uebergabe ist stossfrei.
+        const target = step.adoptFlow ? this.adoptedFlow(step.targetFlowGs) : step.targetFlowGs;
+        this.stageRampFrom = rampMs > 0 ? measuredFlow : target;
+        this.stageTarget = target;
         this.stageRampMs = rampMs;
-        this.lastFlowTarget = step.targetFlowGs;
+        this.lastFlowTarget = target;
         // Seed the plant conductance from the real operating point (flow ÷ power)
         // when there is usable flow: the feed-forward then computes the right pump
         // power for ANY target, so a small and a large setpoint jump both start
@@ -765,15 +804,18 @@ export class FlowHoldDriver {
         }
         this.controller!.seed(seedPower);
         this.controller!.setSetpoint(this.stageRampFrom);
-        this.cfg!.targetFlowGs = step.targetFlowGs; // keep in sync for logging
+        this.cfg!.targetFlowGs = target; // keep in sync for logging
         break;
       }
       case "pressure": {
         const rampMs = step.rampMs !== undefined && step.rampMs > 0 ? step.rampMs : 0;
-        this.stageRampFrom = rampMs > 0 ? this.lastPressureTarget : step.targetPressureBar;
+        // Wie beim Fluss: die Rampe startet beim gemessenen Druck, nicht beim
+        // letzten Druck-Sollwert. Nach einer Preinfusion waere der 0 — bei 4 bar
+        // im Puck laese die Regelung „viel zu viel Druck“ und naehme die Pumpe
+        // zurueck, bevor sie hochfaehrt.
+        this.stageRampFrom = rampMs > 0 ? this.lastPressureBar : step.targetPressureBar;
         this.stageTarget = step.targetPressureBar;
         this.stageRampMs = rampMs;
-        this.lastPressureTarget = step.targetPressureBar;
         this.pressureController!.seed(seedPower);
         this.pressureController!.setSetpoint(this.stageRampFrom);
         break;
@@ -1173,6 +1215,7 @@ export class FlowHoldDriver {
     try {
       await this.client.paddlePumppower(rounded);
       this.lastSentPower = rounded;
+      this.lastSentAt = Date.now();
     } catch (err) {
       this.shotLog?.warn(
         { event: "pump_write_error", power: rounded, err_msg: err instanceof Error ? err.message : String(err) },
@@ -1197,6 +1240,7 @@ export class FlowHoldDriver {
       return;
     }
     this.desiredPower = rounded;
+    this.resendQueued = false;
     if (this.desiredSince === null) this.desiredSince = Date.now();
     if (!this.writeInFlight) {
       this.writeTail = this.drainPumpWrites();
@@ -1212,20 +1256,35 @@ export class FlowHoldDriver {
     try {
       while (this.desiredPower !== null && !this.actuatorLocked) {
         const p = this.desiredPower;
+        const resend = this.resendQueued;
+        this.resendQueued = false;
         const sentAt = Date.now();
         const waitMs = sentAt - (this.desiredSince ?? sentAt);
         this.desiredPower = null;
         this.desiredSince = null;
         try {
           await this.client.paddlePumppower(p);
+          // Ein neuer Wert ist ein neuer Befehl: er darf wieder nachgesendet werden.
+          if (!resend && p !== this.lastSentPower) {
+            this.resendCount = 0;
+            this.resendWarned = false;
+          }
           this.lastSentPower = p;
+          this.lastSentAt = Date.now();
           // Actuation-delay diagnosis (#252/#253): wait behind the in-flight write
           // + write round trip, to set against the pump PWM the machine reports.
           const writeMs = Date.now() - sentAt;
-          this.shotLog?.info(
-            { event: "pump_write", power: p, wait_ms: waitMs, write_ms: writeMs, elapsed_ms: sentAt - this.startedAt },
-            `pumppower=${p} ok in ${writeMs}ms (waited ${waitMs}ms)`,
-          );
+          if (resend) {
+            this.shotLog?.info(
+              { event: "pump_resend", power: p, attempt: this.resendCount, write_ms: writeMs, elapsed_ms: sentAt - this.startedAt },
+              `pumppower=${p} resent (${this.resendCount}/${RESEND_MAX})`,
+            );
+          } else {
+            this.shotLog?.info(
+              { event: "pump_write", power: p, wait_ms: waitMs, write_ms: writeMs, elapsed_ms: sentAt - this.startedAt },
+              `pumppower=${p} ok in ${writeMs}ms (waited ${waitMs}ms)`,
+            );
+          }
         } catch (err) {
           this.shotLog?.warn(
             { event: "pump_write_error", power: p, err_msg: err instanceof Error ? err.message : String(err) },
@@ -1237,6 +1296,37 @@ export class FlowHoldDriver {
     } finally {
       this.writeInFlight = false;
     }
+  }
+
+  /** Nachsenden: steht die gemeldete Leistung RESEND_AFTER_MS nach dem letzten
+   *  bestaetigten Befehl noch mehr als RESEND_DEVIATION_PCT daneben und ist kein
+   *  neuerer Befehl unterwegs, denselben Wert ueber die Pipeline noch einmal senden
+   *  (an POWER_SEND_EPS vorbei). Hoechstens RESEND_MAX-mal je Befehl, danach eine
+   *  Warnung ins Bezugs-Log; kein Abbruch. Nie im oder nach dem Stopp. */
+  private checkPumpReadback(frame: LiveFrame, now: number): void {
+    const sent = this.lastSentPower;
+    const reported = frame.pumpPwm ?? null;
+    if (this.phase !== "hold" || this.stopRequested || this.actuatorLocked) return;
+    if (sent === null || reported === null) return;
+    if (this.desiredPower !== null || this.writeInFlight) return;
+    if (Math.abs(reported - sent) <= RESEND_DEVIATION_PCT) return;
+    if (now - Math.max(this.lastSentAt, this.lastResendAt) < RESEND_AFTER_MS) return;
+    if (this.resendCount >= RESEND_MAX) {
+      if (!this.resendWarned) {
+        this.resendWarned = true;
+        this.shotLog?.warn(
+          { event: "pump_resend_failed", power: sent, reported, attempts: this.resendCount, elapsed_ms: now - this.startedAt },
+          `pumppower=${sent} not taken after ${this.resendCount} resends — machine reports ${reported}`,
+        );
+      }
+      return;
+    }
+    this.resendCount++;
+    this.lastResendAt = now;
+    this.desiredPower = sent;
+    this.desiredSince = now;
+    this.resendQueued = true;
+    this.writeTail = this.drainPumpWrites();
   }
 
   /** Lock the actuator pipeline and await the in-flight write, so the stop
@@ -1270,11 +1360,26 @@ export class FlowHoldDriver {
     return this.lastPlausibleFlowGs;
   }
 
+  /** Ziel fuer „Fluss uebernehmen“: Mittel des Tassenflusses der letzten ~1 s.
+   *  Fliesst noch nichts, der erwartete Wert der Stufe. */
+  private adoptedFlow(expected: number): number {
+    const n = this.recentFlow.length;
+    const avg = n ? this.recentFlow.reduce((a, f) => a + f.gs, 0) / n : 0;
+    return avg > this.cfg!.minFlowForEst ? Math.round(avg * 100) / 100 : expected;
+  }
+
   private resetState(): void {
     this.lastPlausibleWeightG = null;
     this.scaleStall = initialScaleStallState();
     this.lastPlausibleFlowGs = 0;
+    this.lastPressureBar = 0;
+    this.recentFlow = [];
     this.lastSentPower = null;
+    this.lastSentAt = 0;
+    this.lastResendAt = 0;
+    this.resendCount = 0;
+    this.resendWarned = false;
+    this.resendQueued = false;
     this.desiredPower = null;
     this.actuatorLocked = false;
     this.stageIndex = 0;
@@ -1284,7 +1389,6 @@ export class FlowHoldDriver {
     this.stageTarget = 0;
     this.stageRampMs = 0;
     this.lastFlowTarget = 0;
-    this.lastPressureTarget = 0;
     this.lastPowerTarget = 0;
     this.pumpOnMs = 0;
     this.stopRequested = false;

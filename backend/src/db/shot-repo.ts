@@ -1,6 +1,7 @@
 import { getDb } from "./index.js";
 import { brewDefHash, canonicalBrewDef, type BrewDefKind } from "./brew-def.js";
 import type { GhostBasis, GhostSourceSample } from "../../../shared/src/shot-ghosts.js";
+import type { NetShot } from "../../../shared/src/network.js";
 import type {
   Shot,
   NewShot,
@@ -9,6 +10,8 @@ import type {
   ShotCategory,
   GrindNote,
   ChannelingSeverity,
+  VsPrev,
+  ShotCompare,
   TasteTag,
   BrewType,
   RecentShot,
@@ -114,6 +117,10 @@ export interface ShotListFilter {
   beanId?: number;
   grinderId?: number;
   profileId?: number;
+  basketId?: number;
+  /** Schnitt 4: alle Roestungen einer Sorte; die gelaufene Variante. */
+  coffeeId?: number;
+  variantId?: number;
   /** Exact shot rating 1–5. */
   rating?: number;
   /** Inclusive lower/upper bound on started_at (unix ms). */
@@ -139,6 +146,9 @@ export interface GhostCandidateQuery {
    * yield target. And the profile fallback would mix them unconditionally.
    */
   shotSize: ShotSize;
+  /** Hat der Bezug ein Sieb, teilen nur Bezuege mit demselben Sieb die Wolke
+   *  (zwei 1er-Siebe oder das HE-Sieb mischen sich sonst unter „1×“). */
+  basketId?: number | null;
 }
 
 export interface ShotRepo {
@@ -207,7 +217,7 @@ export interface ShotRepo {
    * `withDose` additionally skips shots with no recorded dose.
    */
   findLast(filter: {
-    beanId?: number; grinderId?: number; profileId?: number; withDose?: boolean;
+    beanId?: number; grinderId?: number; profileId?: number; basketId?: number; withDose?: boolean;
   }): Shot | undefined;
   /**
    * §3.4b pre-shot cascade — Sorte stage. Newest shot of ANY roasting of the
@@ -222,6 +232,12 @@ export interface ShotRepo {
    * profile/bean/grinder names. For the dashboard's recent-shots section.
    */
   listRecentBrew(limit: number): RecentShot[];
+  /** Schnitt 4: Startpunkt fuer neue Bohnen — juengster Bezug mit Profil + Sieb + Muehle und einer Sorte gleichen Roestgrads wie `beanId`. */
+  findLastSameRoast(filter: { beanId: number; profileId: number; basketId: number; grinderId: number }): Shot | undefined;
+  /** Schnitt 4: beendete Bezuege fuer das Netz Profil ↔ Bohne. */
+  listNetworkShots(filter: { coffeeId?: number; profileId?: number }): NetShot[];
+  /** Bewertung: der letzte beendete Bezug derselben Sorte vor diesem; null ohne Sorte. */
+  findPreviousSameCoffee(id: number): ShotCompare["previous"];
 }
 
 // ---------------------------------------------------------------------------
@@ -237,8 +253,8 @@ export class SqliteShotRepo implements ShotRepo {
            (profile_id, profile_name, profile_set_temp_c, script_id, shot_size, category, started_at,
             yield_target_g, has_cmd27, cmd27_value,
             bean_id, bean_label, grinder_id, grind_setting, grinder_rpm, dose_g, notes, brew_steps,
-            brew_def_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            brew_def_hash, variant_id, basket_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -260,6 +276,8 @@ export class SqliteShotRepo implements ShotRepo {
         input.notes ?? null,
         input.brewSteps ? JSON.stringify(input.brewSteps) : null,
         input.brewDefHash ?? null,
+        input.variantId ?? null,
+        input.basketId ?? null,
       ) as { lastInsertRowid: number };
     return result.lastInsertRowid;
   }
@@ -445,7 +463,7 @@ export class SqliteShotRepo implements ShotRepo {
       .prepare(
         `SELECT bean_label AS label, COUNT(*) AS n, MAX(started_at) AS last
            FROM shot
-          WHERE bean_label IS NOT NULL AND TRIM(bean_label) != ''
+          WHERE category = 'brew' AND bean_label IS NOT NULL AND TRIM(bean_label) != ''
           GROUP BY LOWER(TRIM(bean_label))
           ORDER BY last DESC`,
       )
@@ -462,15 +480,15 @@ export class SqliteShotRepo implements ShotRepo {
         `SELECT id FROM shot
           WHERE id != ?
             AND ended_at IS NOT NULL
-            AND category != 'maintenance'
+            AND category = 'brew'
             AND COALESCE(scale_lost, 0) = 0
-            AND shot_size = ?
+            AND ${p.basketId != null ? "basket_id = ?" : "shot_size = ?"}
             AND ${p.basis === "brewdef" ? "brew_def_hash = ?" : "profile_id = ?"}
             AND (SELECT COUNT(*) FROM shot_sample s WHERE s.shot_id = shot.id) >= ?
           ORDER BY started_at DESC
           LIMIT ?`,
       )
-      .all(p.excludeShotId, p.shotSize, p.key, p.minSamples, p.limit) as unknown as { id: number }[];
+      .all(p.excludeShotId, p.basketId != null ? p.basketId : p.shotSize, p.key, p.minSamples, p.limit) as unknown as { id: number }[];
     return rows.map((r) => r.id);
   }
 
@@ -515,6 +533,9 @@ export class SqliteShotRepo implements ShotRepo {
     if (filter.beanId !== undefined)    { conds.push("s.bean_id = ?");    params.push(filter.beanId); }
     if (filter.grinderId !== undefined) { conds.push("s.grinder_id = ?"); params.push(filter.grinderId); }
     if (filter.profileId !== undefined) { conds.push("s.profile_id = ?"); params.push(filter.profileId); }
+    if (filter.basketId !== undefined)  { conds.push("s.basket_id = ?");  params.push(filter.basketId); }
+    if (filter.coffeeId !== undefined)  { conds.push("s.bean_id IN (SELECT id FROM bean WHERE coffee_id = ?)"); params.push(filter.coffeeId); }
+    if (filter.variantId !== undefined) { conds.push("s.variant_id = ?"); params.push(filter.variantId); }
     if (filter.rating !== undefined)    { conds.push("s.rating = ?");     params.push(filter.rating); }
     if (filter.startMs !== undefined)   { conds.push("s.started_at >= ?"); params.push(filter.startMs); }
     if (filter.endMs !== undefined)     { conds.push("s.started_at <= ?"); params.push(filter.endMs); }
@@ -542,14 +563,14 @@ export class SqliteShotRepo implements ShotRepo {
                 CASE WHEN p.name IS NOT NULL THEN p.name
                      WHEN s.profile_name IS NOT NULL THEN s.profile_name || ' (Profil gelöscht)'
                      ELSE '(Profil gelöscht)' END AS profile_name,
-                s.shot_size, s.category,
+                s.shot_size, s.category, s.variant_id, s.basket_id,
                 s.started_at, s.ended_at, s.yield_target_g, s.yield_actual_g, s.stop_mode, s.rating, s.notes,
                 s.bean_id, s.bean_label, c.name AS bean_name, c.roaster AS bean_roaster,
                 c.brew_type AS bean_brew_type,
                 s.grinder_id, g.name AS grinder_name,
                 s.grind_setting, s.grinder_rpm, s.dose_g, s.tds_percent, s.profile_set_temp_c,
                 s.acidity, s.bitterness, s.extraction_under, s.extraction_over, s.channeling, s.channeling_severity,
-                s.taste_tags, s.grind_note,
+                s.vs_prev, s.vs_prev_shot_id, s.taste_tags, s.grind_note,
                 CASE WHEN bb.shot_id IS NOT NULL THEN 1 ELSE 0 END AS is_best_brew
          FROM shot s
          LEFT JOIN profile p ON p.id = s.profile_id
@@ -573,6 +594,12 @@ export class SqliteShotRepo implements ShotRepo {
     const fields: string[] = [];
     const values: (string | number | null)[] = [];
 
+    if (patch.basketId !== undefined) {
+      // shot_size folgt dem Siebtyp (HE zaehlt als Einzel) — sonst mischten sich
+      // 1× und 2× wieder in Geisterkurven und Wiederholen.
+      fields.push("basket_id = ?", "shot_size = (SELECT CASE type WHEN 'double' THEN 'double' ELSE 'single' END FROM basket WHERE id = ?)");
+      values.push(patch.basketId, patch.basketId);
+    }
     if (patch.beanId !== undefined)       { fields.push("bean_id = ?");       values.push(patch.beanId); }
     if (patch.beanLabel !== undefined)    { fields.push("bean_label = ?");    values.push(patch.beanLabel); }
     if (patch.grinderId !== undefined)    { fields.push("grinder_id = ?");    values.push(patch.grinderId); }
@@ -594,6 +621,11 @@ export class SqliteShotRepo implements ShotRepo {
       if (patch.channeling === undefined) { fields.push("channeling = ?"); values.push(1); }
     } else if (patch.channelingSeverity === null || patch.channeling === false) {
       fields.push("channeling_severity = ?"); values.push(null);
+    }
+    // Urteil und Vergleichsbezug haengen zusammen: ohne Urteil kein Bezug.
+    if (patch.vsPrev !== undefined) {
+      fields.push("vs_prev = ?", "vs_prev_shot_id = ?");
+      values.push(patch.vsPrev, patch.vsPrev === null ? null : (patch.vsPrevShotId ?? null));
     }
     if (patch.tasteTags !== undefined)    { fields.push("taste_tags = ?");    values.push(patch.tasteTags === null ? null : JSON.stringify(patch.tasteTags)); }
     if (patch.grindNote !== undefined)    { fields.push("grind_note = ?");    values.push(patch.grindNote); }
@@ -639,7 +671,7 @@ export class SqliteShotRepo implements ShotRepo {
   }
 
   findLast(filter: {
-    beanId?: number; grinderId?: number; profileId?: number; withDose?: boolean;
+    beanId?: number; grinderId?: number; profileId?: number; basketId?: number; withDose?: boolean;
   }): Shot | undefined {
     const db = getDb();
     const conditions: string[] = [];
@@ -656,9 +688,15 @@ export class SqliteShotRepo implements ShotRepo {
       conditions.push("profile_id = ?");
       params.push(filter.profileId);
     }
+    if (filter.basketId !== undefined) {
+      conditions.push("basket_id = ?");
+      params.push(filter.basketId);
+    }
     if (conditions.length === 0) return undefined;
     // Not a selector on its own — must not satisfy the guard above.
     if (filter.withDose) conditions.push("dose_g IS NOT NULL");
+    // Nur Bezuege: Wartung und Messlaeufe sind keine Vorlage fuer Mahlgrad/Dosis.
+    conditions.push("category = 'brew'");
 
     const row = db
       .prepare(
@@ -673,7 +711,7 @@ export class SqliteShotRepo implements ShotRepo {
     coffeeId: number; grinderId?: number; withDose?: boolean;
   }): Shot | undefined {
     const db = getDb();
-    const conditions = ["b.coffee_id = ?"];
+    const conditions = ["b.coffee_id = ?", "s.category = 'brew'"];
     const params: number[] = [filter.coffeeId];
     if (filter.grinderId !== undefined) {
       conditions.push("s.grinder_id = ?");
@@ -691,6 +729,87 @@ export class SqliteShotRepo implements ShotRepo {
     return row ? toShot(row) : undefined;
   }
 
+  findLastSameRoast(filter: { beanId: number; profileId: number; basketId: number; grinderId: number }): Shot | undefined {
+    const row = getDb()
+      .prepare(
+        `SELECT s.* FROM shot s
+           JOIN bean b ON b.id = s.bean_id
+           JOIN coffee c ON c.id = b.coffee_id
+          WHERE s.profile_id = ? AND s.basket_id = ? AND s.grinder_id = ?
+            AND s.category = 'brew'
+            AND c.roast_level IS NOT NULL
+            AND c.roast_level = (SELECT c2.roast_level FROM bean b2 JOIN coffee c2 ON c2.id = b2.coffee_id WHERE b2.id = ?)
+          ORDER BY s.started_at DESC LIMIT 1`,
+      )
+      .get(filter.profileId, filter.basketId, filter.grinderId, filter.beanId) as unknown as RawShotRow | undefined;
+    return row ? toShot(row) : undefined;
+  }
+
+  findPreviousSameCoffee(id: number): ShotCompare["previous"] {
+    const row = getDb()
+      .prepare(
+        `SELECT p.id, p.started_at, COALESCE(pr.name, p.profile_name) AS profile_name, p.grind_setting
+           FROM shot s
+           JOIN bean b ON b.id = s.bean_id
+           JOIN shot p ON p.id <> s.id AND p.started_at < s.started_at
+                      AND p.ended_at IS NOT NULL AND p.category = 'brew'
+           JOIN bean pb ON pb.id = p.bean_id AND pb.coffee_id = b.coffee_id
+           LEFT JOIN profile pr ON pr.id = p.profile_id
+          WHERE s.id = ?
+          ORDER BY p.started_at DESC LIMIT 1`,
+      )
+      .get(id) as { id: number; started_at: number; profile_name: string | null; grind_setting: number | null } | undefined;
+    return row
+      ? { id: row.id, startedAt: row.started_at, profileName: row.profile_name, grindSetting: row.grind_setting }
+      : null;
+  }
+
+  listNetworkShots(filter: { coffeeId?: number; profileId?: number }): NetShot[] {
+    const conds = ["s.category = 'brew'", "s.ended_at IS NOT NULL"];
+    const params: number[] = [];
+    if (filter.coffeeId !== undefined) { conds.push("b.coffee_id = ?"); params.push(filter.coffeeId); }
+    if (filter.profileId !== undefined) { conds.push("s.profile_id = ?"); params.push(filter.profileId); }
+    const rows = getDb()
+      .prepare(
+        `SELECT s.id, s.started_at, s.profile_id, COALESCE(p.name, s.profile_name, '(Profil gelöscht)') AS profile_name,
+                s.variant_id, s.basket_id, s.grinder_id, b.coffee_id, c.name AS coffee_name, s.bean_label,
+                s.grind_setting, s.grind_note, s.rating, s.acidity, s.bitterness, s.extraction_under, s.extraction_over,
+                s.channeling, s.channeling_severity, s.taste_tags,
+                CASE WHEN bb.shot_id IS NOT NULL THEN 1 ELSE 0 END AS is_best
+           FROM shot s
+           LEFT JOIN profile p ON p.id = s.profile_id
+           LEFT JOIN bean b ON b.id = s.bean_id
+           LEFT JOIN coffee c ON c.id = b.coffee_id
+           LEFT JOIN best_brew bb ON bb.shot_id = s.id
+          WHERE ${conds.join(" AND ")}
+          ORDER BY s.started_at`,
+      )
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: r.id as number,
+      startedAt: r.started_at as number,
+      profileId: r.profile_id as number | null,
+      profileName: r.profile_name as string,
+      variantId: r.variant_id as number | null,
+      basketId: r.basket_id as number | null,
+      grinderId: r.grinder_id as number | null,
+      coffeeId: (r.coffee_id as number | null) ?? null,
+      coffeeName: (r.coffee_name as string | null) ?? null,
+      beanLabel: r.bean_label as string | null,
+      grindSetting: r.grind_setting as number | null,
+      grindNote: r.grind_note as NetShot["grindNote"],
+      rating: r.rating as number | null,
+      acidity: r.acidity as number | null,
+      bitterness: r.bitterness as number | null,
+      extractionUnder: r.extraction_under === 1,
+      extractionOver: r.extraction_over === 1,
+      channeling: r.channeling === 1,
+      channelingSeverity: r.channeling_severity as NetShot["channelingSeverity"],
+      tasteTags: r.taste_tags ? (JSON.parse(r.taste_tags as string) as string[]) : null,
+      isBestBrew: r.is_best === 1,
+    }));
+  }
+
   listRecentBrew(limit: number): RecentShot[] {
     const db = getDb();
     const rows = db
@@ -699,7 +818,7 @@ export class SqliteShotRepo implements ShotRepo {
                 CASE WHEN p.name IS NOT NULL THEN p.name
                      WHEN s.profile_name IS NOT NULL THEN s.profile_name || ' (Profil gelöscht)'
                      ELSE '(Profil gelöscht)' END AS profile_name,
-                s.shot_size,
+                s.shot_size, s.variant_id, s.basket_id,
                 s.bean_id, s.bean_label, c.name AS bean_name, c.roaster AS bean_roaster,
                 s.grinder_id, g.name AS grinder_name,
                 s.grind_setting, s.grinder_rpm, s.dose_g, s.yield_target_g, s.yield_actual_g,
@@ -724,6 +843,8 @@ export class SqliteShotRepo implements ShotRepo {
 
 interface RawShotRow {
   id: number;
+  variant_id?: number | null;
+  basket_id?: number | null;
   profile_id: number | null; // nullable since the profile_id ON DELETE SET NULL migration
   script_id: number | null; // nullable since the script_id NOT NULL drop (Cut-2 step drives)
   shot_size: string;
@@ -751,6 +872,8 @@ interface RawShotRow {
   extraction_over: number;
   channeling: number;
   channeling_severity: string | null;
+  vs_prev: string | null;
+  vs_prev_shot_id: number | null;
   scale_frozen: number;
   scale_lost: number;
   taste_tags: string | null;
@@ -786,6 +909,8 @@ function toShot(row: RawShotRow): Shot {
   return {
     id: row.id,
     profileId: row.profile_id ?? null,
+    variantId: row.variant_id ?? null,
+    basketId: row.basket_id ?? null,
     scriptId: row.script_id,
     shotSize: row.shot_size as Shot["shotSize"],
     category: row.category as Shot["category"],
@@ -814,6 +939,8 @@ function toShot(row: RawShotRow): Shot {
     extractionOver: row.extraction_over === 1,
     channeling: row.channeling === 1,
     channelingSeverity: (row.channeling_severity as ChannelingSeverity | null) ?? null,
+    vsPrev: (row.vs_prev as VsPrev | null) ?? null,
+    vsPrevShotId: row.vs_prev_shot_id ?? null,
     tasteTags: parseTasteTags(row.taste_tags),
     grindNote: (row.grind_note ?? null) as GrindNote | null,
     brewDefHash: row.brew_def_hash ?? null,
@@ -823,6 +950,8 @@ function toShot(row: RawShotRow): Shot {
 interface RawRecentShotRow {
   bean_label: string | null;
   id: number;
+  variant_id: number | null;
+  basket_id: number | null;
   profile_id: number | null;
   profile_name: string;
   shot_size: string;
@@ -844,6 +973,8 @@ interface RawRecentShotRow {
 interface RawShotListRow {
   bean_label: string | null;
   id: number;
+  variant_id: number | null;
+  basket_id: number | null;
   profile_id: number | null;
   profile_name: string;
   shot_size: string;
@@ -860,6 +991,8 @@ interface RawShotListRow {
   extraction_over: number;
   channeling: number;
   channeling_severity: string | null;
+  vs_prev: string | null;
+  vs_prev_shot_id: number | null;
   taste_tags: string | null;
   grind_note: string | null;
   notes: string | null;
@@ -881,6 +1014,8 @@ function toShotListItem(row: RawShotListRow): ShotListItem {
   return {
     id: row.id,
     profileId: row.profile_id,
+    variantId: row.variant_id,
+    basketId: row.basket_id,
     profileName: row.profile_name,
     shotSize: row.shot_size as ShotListItem["shotSize"],
     category: row.category as ShotListItem["category"],
@@ -896,6 +1031,8 @@ function toShotListItem(row: RawShotListRow): ShotListItem {
     extractionOver: row.extraction_over === 1,
     channeling: row.channeling === 1,
     channelingSeverity: (row.channeling_severity as ChannelingSeverity | null) ?? null,
+    vsPrev: (row.vs_prev as VsPrev | null) ?? null,
+    vsPrevShotId: row.vs_prev_shot_id ?? null,
     tasteTags: parseTasteTags(row.taste_tags),
     grindNote: (row.grind_note ?? null) as GrindNote | null,
     notes: row.notes,
@@ -919,6 +1056,8 @@ function toRecentShot(row: RawRecentShotRow): RecentShot {
   return {
     id: row.id,
     profileId: row.profile_id,
+    variantId: row.variant_id,
+    basketId: row.basket_id,
     profileName: row.profile_name,
     shotSize: row.shot_size as RecentShot["shotSize"],
     beanId: row.bean_id,

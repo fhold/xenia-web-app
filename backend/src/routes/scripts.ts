@@ -29,15 +29,16 @@ import {
 import { checkMachineReadyToStart } from "../lib/start-gate.js";
 import { executeBody } from "../lib/body-schemas.js";
 import { XeniaError } from "../xenia/client.js";
-import { parseScript } from "../../../shared/src/script-parser.js";
+import { parseScript, hasPumpAction } from "../../../shared/src/script-parser.js";
 import { serializeScript } from "../../../shared/src/script-serializer.js";
 import { validateScript } from "../../../shared/src/script-validator.js";
+import { resolveStart } from "../db/variant-repo.js";
+import { SqliteBasketRepo } from "../db/basket-repo.js";
 import type {
   ApiResponse,
   ExecuteRequest,
   ExecuteResult,
   LiveFrame,
-  ShotCategory,
 } from "../../../shared/src/types.js";
 
 /** The machine's own name rule (modeler.js): no leading/trailing blank,
@@ -169,7 +170,9 @@ export function registerScriptRoutes(
 
     const {
       profileId,
-      shotSize,
+      shotSize: requestedSize,
+      variantId,
+      basketId,
       beanId,
       beanLabel,
       grinderId,
@@ -187,13 +190,25 @@ export function registerScriptRoutes(
       return res;
     }
 
-    const scriptId =
-      shotSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble;
+    // Schnitt 3d: mit Variante kommen Skript und Yield aus ihr, shot_size folgt
+    // dem Siebtyp. Ohne Variante wie bisher der Platz aus shotSize.
+    const start = resolveStart(profile.variants ?? [], (id) => new SqliteBasketRepo().findById(id)?.type, { variantId, basketId, shotSize: requestedSize });
+    if (!start.ok) {
+      reply.status(400);
+      const res: ApiResponse = { ok: false, error: start.error };
+      return res;
+    }
+    const shotSize = start.shotSize;
+    const scriptId = start.fromVariant
+      ? start.scriptId
+      : requestedSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble;
     if (!scriptId) {
       reply.status(400);
       const res: ApiResponse = {
         ok: false,
-        error: "No double script configured for this profile",
+        error: start.fromVariant
+          ? "Diese Variante läuft in der App, nicht als Skript."
+          : "No double script configured for this profile",
       };
       return res;
     }
@@ -203,12 +218,9 @@ export function registerScriptRoutes(
       // Pre-brew sync — fresh Cmd-27 detection before execution
       const script = await syncSingleScript(scriptId, client, scriptRepo);
 
-      // Derive category; 'unknown' scripts default to 'brew' for recording
-      const category: ShotCategory =
-        script.categoryAuto === "maintenance" ? "maintenance" : "brew";
-
-      const profileYield =
-        shotSize === "single"
+      const profileYield = start.fromVariant
+        ? start.yieldG
+        : requestedSize === "single"
           ? profile.yieldTargetSingleG
           : profile.yieldTargetDoubleG;
       // Per-shot override wins over the profile default (recording + BbW stop).
@@ -228,24 +240,29 @@ export function registerScriptRoutes(
       // written into the shot record once recording starts.
       armToken = recorder.armForExecute({
         profileId,
+        variantId: start.variantId,
+        basketId: start.basketId,
         profileName: profile.name ?? null,
         scriptId,
         shotSize,
-        category,
-        // Raw category (pre-collapse) for the BBW arming gate (§4.12): unlike
-        // `category` above, this keeps 'unknown'/null distinct from 'brew'.
-        categoryAuto: script.categoryAuto,
-        // SE-2: manual override (local) feeds the same arming gate; null = auto.
-        categoryOverride: script.categoryOverride,
+        // Schnitt 3: Bezug oder Wartung sagt das Profil; das Skript nur, ob es
+        // die Pumpe ansteuert (BBW-Schranke §4.12).
+        category: profile.kind,
+        hasPumpAction: hasPumpAction(parseScript(script.content)),
         hasCmd27: script.hasCmd27,
         cmd27Value: script.cmd27Value,
         yieldTargetG: yieldTarget ?? null,
-        beanId: beanId ?? null,
-        beanLabel: beanLabel ?? null,
-        grinderId: grinderId ?? null,
-        grindSetting: grindSetting ?? null,
-        grinderRpm: grinderRpm ?? null,
-        doseG: doseG ?? null,
+        // Messlauf: aufgezeichnet, aber ohne Bohne/Muehle — er zaehlt nirgends.
+        ...(profile.kind === "test"
+          ? { beanId: null, beanLabel: null, grinderId: null, grindSetting: null, grinderRpm: null, doseG: null }
+          : {
+            beanId: beanId ?? null,
+            beanLabel: beanLabel ?? null,
+            grinderId: grinderId ?? null,
+            grindSetting: grindSetting ?? null,
+            grinderRpm: grinderRpm ?? null,
+            doseG: doseG ?? null,
+          }),
         notes: notes ?? null,
         // Freeze the token string just synced from the machine — the next sync
         // overwrites xenia_script.content, and this shot must keep pointing at
@@ -261,10 +278,10 @@ export function registerScriptRoutes(
       // Only persist a real id: a null selection ("no bean" / "no grinder")
       // must NOT clear the stored active id — otherwise the convenience
       // prefill of the genuinely last-used bean/grinder would be lost.
-      if (beanId !== undefined && beanId !== null) {
+      if (profile.kind !== "test" && beanId !== undefined && beanId !== null) {
         settingsRepo.set("active_bean_id", String(beanId));
       }
-      if (grinderId !== undefined && grinderId !== null) {
+      if (profile.kind !== "test" && grinderId !== undefined && grinderId !== null) {
         settingsRepo.set("active_grinder_id", String(grinderId));
       }
 
@@ -418,7 +435,7 @@ export function registerScriptRoutes(
     }
     const users = profileRepo
       .listAll()
-      .filter((p) => p.scriptIdSingle === numId || p.scriptIdDouble === numId);
+      .filter((p) => p.scriptIdSingle === numId || p.scriptIdDouble === numId || p.variants?.some((v) => v.scriptId === numId));
     if (users.length > 0) {
       reply.status(409);
       const res: ApiResponse = {

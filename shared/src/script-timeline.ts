@@ -7,7 +7,8 @@
  *  - The command processor is FIRE-AND-FORGET: a pump/boiler command (Cmd 3/4/5)
  *    is handed to the system and the processor immediately moves on. Only a
  *    WAIT command (Cmd 12) — and the indeterminate waits Cmd 25 ("bis °C") /
- *    Cmd 27 ("bis g") — pause the processor and thus advance the time cursor.
+ *    Cmd 26 ("bis bar") / Cmd 27 ("bis g") — pause the processor and thus
+ *    advance the time cursor.
  *  - A pump command RAMPS its mode's value from the current value to the target
  *    over `ramp_dur`, starting when it fires; afterwards it HOLDS the target.
  *    The ramp runs in PARALLEL to the following wait.
@@ -28,7 +29,7 @@
 import type { ParsedScript, ParsedCmd } from "./types.js";
 import { CMD_ARGS, CMD_HELP } from "./script-help.js";
 
-/** Nominal width (ms) used for an indeterminate wait (Cmd 25/27). The band is
+/** Nominal width (ms) used for an indeterminate wait (Cmd 25/26/27). The band is
  *  shaded + labelled by the frontend; the width is NOT to scale. */
 export const INDETERMINATE_WAIT_MS = 12_000;
 
@@ -81,9 +82,13 @@ export interface ScriptPhase {
   noWait: boolean;
   /** Plain-text label, e.g. "→ 9 bar in 3 s" / "Leistung → 20 % in 35 s". */
   label: string;
+  /** Nur App-Stufen (steps-curve.ts): der Rampenstart ist der Ist-Fluss, hier nur angedeutet. */
+  startEstimated?: boolean;
+  /** Nur App-Stufen: Preinfusion ohne festen Sollwert — Flaeche ohne Linie. */
+  noTarget?: boolean;
 }
 
-export type WaitKind = "weight" | "temp";
+export type WaitKind = "weight" | "temp" | "pressure";
 export interface WaitSegment {
   kind: WaitKind;
   value: number;
@@ -110,7 +115,7 @@ export interface TempSetpoint {
 export interface ScriptTimeline {
   /** Mode-segmented phases (ramp + hold) in nominal-time order. */
   phases: ScriptPhase[];
-  /** Indeterminate-wait bands (Cmd 27/25). */
+  /** Indeterminate-wait bands (Cmd 25/26/27). */
   waits: WaitSegment[];
   /** Target-temp annotations (Cmd 25). */
   tempSetpoints: TempSetpoint[];
@@ -154,7 +159,7 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
   }
   const cmds = parsed.commands;
 
-  // ---- Pass 1: nominal time cursor. Only waits (12) + indeterminate (25/27)
+  // ---- Pass 1: nominal time cursor. Only waits (12) + indeterminate (25/26/27)
   //      advance T. Pump/boiler/structure commands are fire-and-forget. ----
   const tAt: number[] = new Array(cmds.length);
   const waits: WaitSegment[] = [];
@@ -171,6 +176,11 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
       const tStart = T;
       T += INDETERMINATE_WAIT_MS;
       waits.push({ kind: "temp", value: temp, label: `bis ${fmtV(temp)} °C`, tStart, tEnd: T });
+    } else if (c.cmd === 26) {
+      const bar = num(c.args[0]) / 1000;
+      const tStart = T;
+      T += INDETERMINATE_WAIT_MS;
+      waits.push({ kind: "pressure", value: bar, label: `bis ${fmtV(bar)} bar`, tStart, tEnd: T });
     } else if (c.cmd === 27) {
       const g = num(c.args[0]);
       const tStart = T;
@@ -293,7 +303,7 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
       case 29: pressureLimitBar = num(c.args[0]); break;
       case 30: flowLimitMlS = num(c.args[0]); break;
       default:
-        if (![3, 4, 5, 6, 12, 25, 27].includes(c.cmd)) {
+        if (![3, 4, 5, 6, 12, 25, 26, 27].includes(c.cmd)) {
           markers.push({ t, kind: "unknown", label: `Cmd ${c.cmd}` });
         }
         break;

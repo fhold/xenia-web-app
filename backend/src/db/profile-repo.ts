@@ -1,4 +1,5 @@
 import { getDb } from "./index.js";
+import { saveVariants, syncProfileVariants, variantsByProfile, variantsOf } from "./variant-repo.js";
 import type { Profile, ProfileCreate, ProfileUpdate } from "../../../shared/src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -8,14 +9,15 @@ import type { Profile, ProfileCreate, ProfileUpdate } from "../../../shared/src/
 export interface ProfileRepo {
   insert(profile: ProfileCreate): number;
   findById(id: number): Profile | undefined;
-  /** Sorted: favorites first (by favoriteOrder ASC), then by updated_at DESC. */
+  /** Sorted: favorites first, each group by sort_order ASC (unset last, then updated_at DESC). */
   listAll(): Profile[];
   update(id: number, patch: ProfileUpdate): void;
   delete(id: number): void;
   /** Max 5, sorted by favoriteOrder ASC. */
   listFavorites(): Profile[];
-  /** Sets sort_order for each ID in the given order (0, 1, 2, ...). */
-  reorderFavorites(orderedIds: number[]): void;
+  /** Sets sort_order for each ID in the given order (0, 1, 2, ...) — favorites
+   *  and the rest alike; listAll keeps favorites on top regardless. */
+  reorder(orderedIds: number[]): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -28,13 +30,15 @@ export class SqliteProfileRepo implements ProfileRepo {
     const result = db
       .prepare(
         `INSERT INTO profile
-           (name, description, script_single, script_double,
+           (name, kind, trial, description, script_single, script_double,
             yield_single_g, yield_double_g, fav, sort_order, notes, target_temp_c,
             brew_steps, brew_steps_double)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         profile.name,
+        profile.kind ?? "brew",
+        profile.isTrial ? 1 : 0,
         null, // description always null in V1 — no editor field yet
         profile.scriptIdSingle ?? null,
         profile.scriptIdDouble ?? null,
@@ -47,6 +51,10 @@ export class SqliteProfileRepo implements ProfileRepo {
         profile.brewSteps ? JSON.stringify(profile.brewSteps) : null,
         profile.brewStepsDouble ? JSON.stringify(profile.brewStepsDouble) : null,
       ) as { lastInsertRowid: number };
+    // Mit Varianten (Schnitt 3c) fuehren sie und leiten die Kurven-Spalten ab;
+    // sonst entstehen sie aus den Spalten wie bisher.
+    if (profile.variants) saveVariants(Number(result.lastInsertRowid), profile.variants);
+    else syncProfileVariants(Number(result.lastInsertRowid));
     return result.lastInsertRowid;
   }
 
@@ -55,7 +63,7 @@ export class SqliteProfileRepo implements ProfileRepo {
     const row = db
       .prepare("SELECT * FROM profile WHERE id = ?")
       .get(id) as unknown as RawProfileRow | undefined;
-    return row ? toProfile(row) : undefined;
+    return row ? { ...toProfile(row), variants: variantsOf(id) } : undefined;
   }
 
   listAll(): Profile[] {
@@ -66,7 +74,8 @@ export class SqliteProfileRepo implements ProfileRepo {
          ORDER BY fav DESC, sort_order ASC NULLS LAST, updated_at DESC`,
       )
       .all() as unknown as RawProfileRow[];
-    return rows.map(toProfile);
+    const variants = variantsByProfile();
+    return rows.map((r) => ({ ...toProfile(r), variants: variants.get(r.id) ?? [] }));
   }
 
   update(id: number, patch: ProfileUpdate): void {
@@ -116,6 +125,8 @@ export class SqliteProfileRepo implements ProfileRepo {
     // include favoriteOrder only for standalone reorder calls (no isFavorite).
     const columnMap: Record<string, string> = {
       name:               "name",
+      kind:               "kind",
+      isTrial:            "trial",
       scriptIdSingle:     "script_single",
       scriptIdDouble:     "script_double",
       yieldTargetSingleG: "yield_single_g",
@@ -127,19 +138,27 @@ export class SqliteProfileRepo implements ProfileRepo {
       ...(patch.isFavorite === undefined ? { favoriteOrder: "sort_order" } : {}),
     };
 
-    const entries = Object.entries(patch).filter(([k]) => k in columnMap);
-    if (entries.length === 0) return;
+    // Mit Varianten (Schnitt 3c) leiten sich die Kurven-Spalten aus ihnen ab.
+    const curveFields = ["scriptIdSingle", "scriptIdDouble", "yieldTargetSingleG", "yieldTargetDoubleG", "brewSteps", "brewStepsDouble"];
+    const entries = Object.entries(patch).filter(([k]) => k in columnMap && !(patch.variants && curveFields.includes(k)));
 
-    const setClauses = entries
-      .map(([k]) => `${columnMap[k]} = ?`)
-      .concat("updated_at = CURRENT_TIMESTAMP");
+    if (entries.length > 0) {
+      const setClauses = entries
+        .map(([k]) => `${columnMap[k]} = ?`)
+        .concat("updated_at = CURRENT_TIMESTAMP");
 
-    const values: (null | number | string)[] = entries.map(([k, v]) => {
-      if (k === "brewSteps" || k === "brewStepsDouble") return v ? JSON.stringify(v) : null;
-      return (v as null | number | string) ?? null;
-    });
+      const values: (null | number | string)[] = entries.map(([k, v]) => {
+        if (k === "brewSteps" || k === "brewStepsDouble") return v ? JSON.stringify(v) : null;
+        if (k === "isTrial") return v ? 1 : 0;
+        return (v as null | number | string) ?? null;
+      });
 
-    db.prepare(`UPDATE profile SET ${setClauses.join(", ")} WHERE id = ?`).run(...values, id);
+      db.prepare(`UPDATE profile SET ${setClauses.join(", ")} WHERE id = ?`).run(...values, id);
+    }
+    if (patch.variants) saveVariants(id, patch.variants);
+    // Ein alter Schreiber aendert die Kurven-Spalten: in die Varianten ihrer
+    // Plaetze uebernehmen. Name, Favorit, Notiz … beruehren die Varianten nicht.
+    else if (entries.some(([k]) => curveFields.includes(k))) syncProfileVariants(id);
   }
 
   delete(id: number): void {
@@ -154,10 +173,11 @@ export class SqliteProfileRepo implements ProfileRepo {
         "SELECT * FROM profile WHERE fav = 1 ORDER BY sort_order ASC NULLS LAST LIMIT 5",
       )
       .all() as unknown as RawProfileRow[];
-    return rows.map(toProfile);
+    const variants = variantsByProfile();
+    return rows.map((r) => ({ ...toProfile(r), variants: variants.get(r.id) ?? [] }));
   }
 
-  reorderFavorites(orderedIds: number[]): void {
+  reorder(orderedIds: number[]): void {
     if (orderedIds.length === 0) return;
     const db = getDb();
     const stmt = db.prepare(
@@ -182,6 +202,8 @@ export class SqliteProfileRepo implements ProfileRepo {
 interface RawProfileRow {
   id: number;
   name: string;
+  kind: "brew" | "maintenance";
+  trial: number;
   description: string | null;
   icon: string | null; // column exists in DB, intentionally ignored
   script_single: number | null;
@@ -202,6 +224,8 @@ function toProfile(row: RawProfileRow): Profile {
   return {
     id: row.id,
     name: row.name,
+    kind: row.kind,
+    isTrial: row.trial === 1,
     description: row.description,
     scriptIdSingle: row.script_single, // null = flow-driven profile (brewSteps)
     scriptIdDouble: row.script_double,

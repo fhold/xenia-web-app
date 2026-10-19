@@ -23,18 +23,24 @@ import type { ScriptRepo } from "../db/script-repo.js";
 import type { BestBrewRepo } from "../db/best-brew-repo.js";
 import type { ShotRecorder } from "../shots/recorder.js";
 import type { FlowHoldDriver } from "../xenia/flow-hold-driver.js";
+import type { SettingsRepo } from "../db/settings-repo.js";
 import { XeniaError } from "../xenia/client.js";
 import { canonicalBrewDef } from "../db/brew-def.js";
+import { SqliteBasketRepo } from "../db/basket-repo.js";
 import type {
   ApiResponse,
   BrewDefInfo,
+  GrindSource,
+  Profile,
   Shot,
+  ShotCompare,
   ShotDetail,
   ShotListResponse,
   ShotSortKey,
   ShotUpdate,
 } from "../../../shared/src/types.js";
 import { TASTE_TAGS } from "../../../shared/src/types.js";
+import { effectiveVariant } from "../../../shared/src/profile-slots.js";
 
 /** How many ghosts a client gets by default / at most, and the stub cutoff. */
 const GHOST_DEFAULT_LIMIT = 20;
@@ -52,15 +58,27 @@ export function registerShotRoutes(
   bestBrewRepo: BestBrewRepo,
   broadcastShotUpdated: (shot: Shot) => void,
   driver: FlowHoldDriver,
+  /** Fuer die Einstellung rating_compare_prev (Vergleich in der Bewertung). */
+  settingsRepo?: SettingsRepo,
 ): void {
-  // SO-1: live-resolve a shot's script (profile → script id by size → content),
+  /** Die Kurve der Variante des Bezugs („wie Variante X“ aufgeloest); null = aelterer Bezug ohne Variante. */
+  const shotVariant = (shot: Shot, profile: Profile) => {
+    const v = shot.variantId != null ? profile.variants?.find((x) => x.id === shot.variantId) : undefined;
+    return v ? effectiveVariant(profile, v) : null;
+  };
+
+  const baskets = new SqliteBasketRepo();
+
+  // SO-1: live-resolve a shot's script (profile → script id by variant or size → content),
   // only if it still exists (not orphaned). null → frontend shows no overlay.
   const resolveCurrentScriptContent = (shot: Shot): string | null => {
     if (shot.profileId === null) return null;
     const profile = profileRepo.findById(shot.profileId);
     if (!profile) return null;
-    const scriptId =
-      shot.shotSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble;
+    const v = shotVariant(shot, profile);
+    const scriptId = v
+      ? v.scriptId
+      : shot.shotSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble;
     if (scriptId === null || scriptId === undefined) return null;
     const script = scriptRepo.findById(scriptId);
     if (!script || script.orphanedAt !== null) return null;
@@ -73,8 +91,10 @@ export function registerShotRoutes(
     if (shot.profileId === null) return null;
     const profile = profileRepo.findById(shot.profileId);
     if (!profile) return null;
-    const steps =
-      shot.shotSize === "single"
+    const v = shotVariant(shot, profile);
+    const steps = v
+      ? v.brewSteps
+      : shot.shotSize === "single"
         ? profile.brewSteps
         : (profile.brewStepsDouble ?? profile.brewSteps);
     return steps ? JSON.stringify(steps) : null;
@@ -109,7 +129,7 @@ export function registerShotRoutes(
   // ---------------------------------------------------------------------------
   // GET /api/shots — history list with filter, sort and pagination
   // Query: limit (≤100, default 30), offset, sort, category (default 'brew'),
-  //        bean_id, grinder_id, profile_id, rating, start_date, end_date
+  //        bean_id, grinder_id, profile_id, basket_id, rating, start_date, end_date
   // ---------------------------------------------------------------------------
   app.get("/api/shots", async (req) => {
     const q = req.query as Record<string, string | undefined>;
@@ -124,7 +144,7 @@ export function registerShotRoutes(
       : "date_desc") as ShotSortKey;
 
     const category =
-      q.category === "maintenance" || q.category === "all" || q.category === "brew"
+      q.category === "maintenance" || q.category === "all" || q.category === "brew" || q.category === "test"
         ? q.category
         : "brew";
 
@@ -142,6 +162,9 @@ export function registerShotRoutes(
       beanId: numParam(q.bean_id),
       grinderId: numParam(q.grinder_id),
       profileId: numParam(q.profile_id),
+      basketId: numParam(q.basket_id),
+      coffeeId: numParam(q.coffee_id),
+      variantId: numParam(q.variant_id),
     };
 
     if (q.rating) {
@@ -194,19 +217,27 @@ export function registerShotRoutes(
   });
 
   // ---------------------------------------------------------------------------
-  // GET /api/shots/preshot-defaults?beanId=&grinderId= — pre-shot prefill
+  // GET /api/shots/preshot-defaults?beanId=&grinderId=&profileId=&basketId= — pre-shot prefill
   //
   // Cascade (§3.4b — extends Step 9 with a Coffee/Sorte stage so a freshly
-  // re-purchased roasting with no shots yet still prefills from the same coffee):
+  // re-purchased roasting with no shots yet still prefills from the same coffee;
+  // Schnitt 3e puts profile + basket in front):
   //   grindSetting / grinderRpm (grinder-specific — same scale across roastings):
+  //     0. roasting + grinder + profile + basket — the same bean wants another
+  //        grind per profile (Lever 22, Gagne 20, 80s Decent 18,5 at the DF83v)
   //     1. roasting + grinder (exact)
-  //     2. NEW: same coffee (other roasting) + SAME grinder
+  //     2. same coffee (other roasting) + SAME grinder
+  //     2b. profile + basket + grinder with a coffee of the same roast level
+  //        (Schnitt 4: Startpunkt fuer neue Bohnen)
   //     3. grinder (any coffee)
   //     4. null
   //   doseG (coffee property — grinder-independent):
+  //     0. roasting + basket — the dose belongs to the basket
   //     1. roasting + grinder (exact)
-  //     2. NEW: same coffee (any grinder)
+  //     2. same coffee (any grinder)
   //     3. null
+  // The basket is the requested one, else the one last used with the profile
+  // (chip start). `grindSource` names the stage and the source shot.
   // Source of each value is the newest matching shot (started_at DESC). The
   // coffee-grind stage requires the SAME grinder because grind numbers are
   // grinder-specific (DF83v 17 ≠ DF64 17).
@@ -214,10 +245,11 @@ export function registerShotRoutes(
   // Must be before /:id so Fastify matches "preshot-defaults" statically.
   // ---------------------------------------------------------------------------
   app.get("/api/shots/preshot-defaults", async (req) => {
-    const q = req.query as { beanId?: string; grinderId?: string; profileId?: string };
+    const q = req.query as { beanId?: string; grinderId?: string; profileId?: string; basketId?: string };
     const explicitBeanId    = q.beanId    ? parseInt(q.beanId, 10)    : NaN;
     const explicitGrinderId = q.grinderId ? parseInt(q.grinderId, 10) : NaN;
     const profileId         = q.profileId ? parseInt(q.profileId, 10) : NaN;
+    const explicitBasketId  = q.basketId  ? parseInt(q.basketId, 10)  : NaN;
 
     // Bean: an explicit beanId (user picked in the dialog / repeat flow) wins;
     // otherwise the bean last brewed with THIS profile — the per-profile default
@@ -241,45 +273,68 @@ export function registerShotRoutes(
 
     // The coffee (Sorte) this roasting belongs to — drives the new stage.
     const coffeeId = hasBean ? (beanRepo.findById(beanId)?.coffeeId ?? null) : null;
+    const basketId = !Number.isNaN(explicitBasketId) ? explicitBasketId : (lastProfileShot?.basketId ?? NaN);
+    const hasBasket = !Number.isNaN(basketId);
 
     let grindSetting: number | null = null;
     let grinderRpm: number | null = null;
     let doseG: number | null = null;
+    let grindSource: GrindSource | null = null;
 
-    // grind / rpm — pick the source shot by stage precedence, then take its
-    // values (even if null) and stop. Stage 1+2 need a grinder.
-    let gShot = hasBean && hasGrinder ? shotRepo.findLast({ beanId, grinderId }) : undefined;
-    if (!gShot && coffeeId !== null && hasGrinder) {
-      gShot = shotRepo.findLastByCoffee({ coffeeId, grinderId });
-    }
-    if (!gShot && hasGrinder) {
-      gShot = shotRepo.findLast({ grinderId });
-    }
-    if (gShot) {
+    // grind / rpm — the first stage with a source shot gives both values (even
+    // if null) and stops. Every stage needs the grinder.
+    const grindStages: [GrindSource["stage"], () => Shot | undefined][] = [
+      ["profileBasket", () => (hasBean && hasGrinder && !Number.isNaN(profileId) && hasBasket
+        ? shotRepo.findLast({ beanId, grinderId, profileId, basketId }) : undefined)],
+      ["bean", () => (hasBean && hasGrinder ? shotRepo.findLast({ beanId, grinderId }) : undefined)],
+      ["coffee", () => (coffeeId !== null && hasGrinder ? shotRepo.findLastByCoffee({ coffeeId, grinderId }) : undefined)],
+      // Schnitt 4: Startpunkt fuer neue Bohnen — gleiches Profil + Sieb + Muehle, Sorte gleichen Roestgrads.
+      ["roast", () => (hasBean && hasGrinder && !Number.isNaN(profileId) && hasBasket
+        ? shotRepo.findLastSameRoast({ beanId, profileId, basketId, grinderId }) : undefined)],
+      ["grinder", () => (hasGrinder ? shotRepo.findLast({ grinderId }) : undefined)],
+    ];
+    for (const [stage, find] of grindStages) {
+      const gShot = find();
+      if (!gShot) continue;
       grindSetting = gShot.grindSetting;
       grinderRpm = gShot.grinderRpm;
+      grindSource = { stage, shotId: gShot.id, startedAt: gShot.startedAt, grindNote: gShot.grindNote };
+      break;
     }
 
-    // dose — exact roasting+grinder, then same coffee (any grinder). Both stages
+    // dose — roasting+basket, then the basket's nominal dose (a basket without
+    // shots, e.g. a new 3er, does not inherit the dose of another basket), then
+    // exact roasting+grinder, then same coffee (any grinder). All shot stages
     // skip shots that have no dose recorded: otherwise a single shot saved
     // without one shadows every older shot that has it, and the prefill stays
     // empty from then on — which then produces the next dose-less shot.
-    let dShot = hasBean && hasGrinder
-      ? shotRepo.findLast({ beanId, grinderId, withDose: true })
-      : undefined;
-    if (!dShot && coffeeId !== null) {
+    let dShot = hasBean && hasBasket ? shotRepo.findLast({ beanId, basketId, withDose: true }) : undefined;
+    const nominalDoseG = !dShot && hasBasket ? (baskets.findById(basketId)?.nominalDoseG ?? null) : null;
+    if (!dShot && nominalDoseG === null && hasBean && hasGrinder) {
+      dShot = shotRepo.findLast({ beanId, grinderId, withDose: true });
+    }
+    if (!dShot && nominalDoseG === null && coffeeId !== null) {
       dShot = shotRepo.findLastByCoffee({ coffeeId, withDose: true });
     }
     if (dShot) {
       doseG = dShot.doseG;
+    } else if (nominalDoseG !== null) {
+      doseG = nominalDoseG;
     }
 
     return {
       suggestedBeanId: hasBean ? beanId : null,
       suggestedGrinderId: hasGrinder ? grinderId : null,
+      // Start vom Dashboard-Chip: Einzel oder Doppel wie beim letzten Bezug
+      // mit diesem Profil (die 1×/2×-Zwischenfrage gibt es nicht mehr).
+      suggestedShotSize: lastProfileShot?.shotSize ?? null,
+      // Schnitt 3d: Variante und Sieb wie beim letzten Bezug mit diesem Profil.
+      suggestedVariantId: lastProfileShot?.variantId ?? null,
+      suggestedBasketId: lastProfileShot?.basketId ?? null,
       grindSetting,
       grinderRpm,
       doseG,
+      grindSource,
     };
   });
 
@@ -336,6 +391,22 @@ export function registerShotRoutes(
   });
 
   // ---------------------------------------------------------------------------
+  // GET /api/shots/:id/compare — womit die Bewertung vergleicht: der letzte
+  // beendete Bezug derselben Sorte vor diesem, und ob die Einstellung an ist.
+  // ---------------------------------------------------------------------------
+  app.get("/api/shots/:id/compare", async (req, reply) => {
+    const numId = parseInt((req.params as { id: string }).id, 10);
+    if (Number.isNaN(numId) || !shotRepo.findById(numId)) {
+      return reply.status(404).send({ ok: false, error: "Shot not found" } as ApiResponse);
+    }
+    const res: ShotCompare = {
+      enabled: settingsRepo?.get("rating_compare_prev") === "true",
+      previous: shotRepo.findPreviousSameCoffee(numId),
+    };
+    return res;
+  });
+
+  // ---------------------------------------------------------------------------
   // PUT /api/shots/:id — edit a shot's editable fields (bean, grinder, grind,
   // rpm, dose, tds, rating, notes). Non-editable fields are ignored by the repo.
   // ---------------------------------------------------------------------------
@@ -368,12 +439,25 @@ export function registerShotRoutes(
       (body.grindNote !== undefined &&
         body.grindNote !== null &&
         !["finer", "ok", "coarser"].includes(body.grindNote)) ||
+      (body.vsPrev !== undefined &&
+        body.vsPrev !== null &&
+        !["worse", "same", "better"].includes(body.vsPrev)) ||
       (body.tasteTags !== undefined &&
         body.tasteTags !== null &&
         (!Array.isArray(body.tasteTags) ||
           !body.tasteTags.every((t) => (TASTE_TAGS as readonly string[]).includes(t))));
     if (bad) {
       return reply.status(400).send({ ok: false, error: "Invalid rating value" } as ApiResponse);
+    }
+    // Ein Urteil braucht den Bezug, gegen den es gefaellt wurde.
+    if (body.vsPrev != null) {
+      const ref = body.vsPrevShotId;
+      if (!(typeof ref === "number" && Number.isInteger(ref) && ref !== numId && shotRepo.findById(ref))) {
+        return reply.status(400).send({ ok: false, error: "Vergleichsbezug fehlt oder gibt es nicht." } as ApiResponse);
+      }
+    }
+    if (body.basketId !== undefined && !(Number.isInteger(body.basketId) && baskets.findById(body.basketId))) {
+      return reply.status(400).send({ ok: false, error: `Sieb ${String(body.basketId)} gibt es nicht.` } as ApiResponse);
     }
     if (!shotRepo.updateShot(numId, body)) {
       return reply.status(404).send({ ok: false, error: `Shot ${numId} not found` } as ApiResponse);
@@ -435,6 +519,7 @@ export function registerShotRoutes(
       minSamples: GHOST_MIN_SAMPLES,
       limit,
       shotSize: shot.shotSize,
+      basketId: shot.basketId ?? null,
     });
     const samplesById = shotRepo.listGhostSamples(ids);
 

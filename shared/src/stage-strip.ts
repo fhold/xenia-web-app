@@ -6,7 +6,8 @@
  *    dem Profil-Schnappschuss des Bezugs (Namen, Rampen, Ausstiegswerte).
  *  - Skript-Bezuege: aus dem Skript selbst. Die Maschine arbeitet es nach der Uhr
  *    ab, Nominalzeit == echte Zeit — bis zum ersten unbestimmten Warten (Cmd 27
- *    „bis g“ / Cmd 25 „bis °C“). Danach ist die Lage nur nominal (`uncertain`),
+ *    „bis g“ / Cmd 26 „bis bar“ / Cmd 25 „bis °C“). Danach ist die Lage nur
+ *    nominal (`uncertain`),
  *    genau wie bei der Soll-Kurve (script-overlay.ts).
  *
  * Reine Funktionen; die Anzeige formatiert Texte und Einheiten selbst.
@@ -28,7 +29,7 @@ export type StripWhat =
 export type StripExit =
   | { kind: "seconds" | "weight" | "pressureAbove" | "pressureBelow" | "flowBelow"; value: number }
   | { kind: "arrived" }
-  | { kind: "waitWeight" | "waitTemp"; value: number }
+  | { kind: "waitWeight" | "waitTemp" | "waitPressure"; value: number }
   | { kind: "stop"; mode: StopMode | null; weightG: number | null };
 
 export interface StripSegment {
@@ -55,6 +56,8 @@ export interface StripStop {
   mode: StopMode | null;
   weightG: number | null;
 }
+
+const WAIT_EXIT = { weight: "waitWeight", temp: "waitTemp", pressure: "waitPressure" } as const;
 
 const EXIT_KIND = {
   seconds: "seconds",
@@ -149,7 +152,7 @@ export function scriptStageStrip(
     const wait = tl.waits.find((w) => w.tStart >= p.tStart && w.tStart < p.tEnd);
     const exit: StripExit =
       endS >= brewEndS ? { kind: "stop", mode: stop.mode, weightG: stop.weightG }
-        : wait ? { kind: wait.kind === "weight" ? "waitWeight" : "waitTemp", value: wait.value }
+        : wait ? { kind: WAIT_EXIT[wait.kind], value: wait.value }
           : { kind: "seconds", value: (p.tEnd - p.tStart) / 1000 };
     segments.push({
       startS,

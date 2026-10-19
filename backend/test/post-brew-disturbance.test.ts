@@ -87,7 +87,7 @@ function makeRig(opts: { bbw?: boolean } = {}) {
 
 const ARM: ArmArgs = {
   profileId: 1, profileName: "Test", scriptId: 30, shotSize: "single",
-  category: "brew", categoryAuto: "brew", categoryOverride: null,
+  category: "brew", hasPumpAction: true,
   hasCmd27: false, cmd27Value: null, yieldTargetG: 24,
   beanId: null, grinderId: null, grindSetting: null, grinderRpm: null, doseG: null, notes: null,
 };

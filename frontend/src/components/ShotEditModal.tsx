@@ -1,7 +1,7 @@
 /**
  * ShotEditModal — edits the editable fields of a recorded shot.
  *
- * Fields: bean, grinder, grind setting, RPM, dose, TDS, notes.
+ * Fields: bean, grinder, basket (brew shots), grind setting, RPM, dose, TDS, notes.
  *
  * Die BEWERTUNG wird hier nicht als Sternenreihe nachgebaut, sondern an den
  * Bewertungsscreen abgegeben — derselbe Weg wie im Bezugs-Detail. Vorher gab
@@ -17,6 +17,7 @@ import { Star, X } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { useBeans } from "../hooks/useBeans.js";
 import { useGrinders } from "../hooks/useGrinders.js";
+import { useBaskets, basketName } from "../hooks/useBaskets.js";
 import { BeanPicker } from "./BeanPicker.js";
 import { RatingModal } from "./RatingModal.js";
 import { ratingValuesToPatch } from "./RatingScreen.js";
@@ -80,8 +81,11 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
   const { t } = useTranslation();
   const { beans } = useBeans();
   const { grinders } = useGrinders();
+  const { baskets } = useBaskets();
 
   const [beanId, setBeanId]           = useState<number | null>(shot.beanId);
+  // Schnitt 3e: das benutzte Sieb, korrigierbar — nur bei Bezuegen (Wartung hat keins).
+  const [basketId, setBasketId]       = useState<number | null>(shot.basketId ?? null);
   const [grinderId, setGrinderId]     = useState<number | null>(shot.grinderId);
   const [grindSetting, setGrindSetting] = useState(numToStr(shot.grindSetting));
   const [grinderRpm, setGrinderRpm]   = useState(numToStr(shot.grinderRpm));
@@ -101,6 +105,8 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
     tasteTags: shot.tasteTags ?? [],
     grindNote: shot.grindNote,
     notes: shot.notes ?? "",
+    vsPrev: shot.vsPrev ?? null,
+    vsPrevShotId: shot.vsPrevShotId ?? null,
   });
   const [ratingOpen, setRatingOpen] = useState(false);
 
@@ -112,6 +118,7 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
 
   // Dirty check — compare the form back to the shot's stored values.
   const dirty =
+    basketId !== (shot.basketId ?? null) ||
     beanId !== shot.beanId ||
     grinderId !== shot.grinderId ||
     grindSetting !== numToStr(shot.grindSetting) ||
@@ -130,6 +137,7 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
     setError(null);
     try {
       const patch: ShotUpdate = {
+        ...(basketId !== null && basketId !== (shot.basketId ?? null) ? { basketId } : {}),
         beanId,
         grinderId,
         grindSetting: grindSetting.trim() !== "" ? parseFloat(grindSetting) : null,
@@ -197,18 +205,34 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
           />
         </Field>
 
-        <Field label={t("history.editModal.grinder")}>
-          <select
-            style={inputStyle}
-            value={grinderId ?? ""}
-            onChange={(e) => setGrinderId(e.target.value === "" ? null : Number(e.target.value))}
-          >
-            <option value="">{t("history.editModal.noGrinder")}</option>
-            {grinders.map((g) => (
-              <option key={g.id} value={g.id}>{g.name}</option>
-            ))}
-          </select>
-        </Field>
+        <div style={{ display: "grid", gridTemplateColumns: shot.category === "brew" ? "1fr 1fr" : "1fr", gap: 10 }}>
+          <Field label={t("history.editModal.grinder")}>
+            <select
+              style={inputStyle}
+              value={grinderId ?? ""}
+              onChange={(e) => setGrinderId(e.target.value === "" ? null : Number(e.target.value))}
+            >
+              <option value="">{t("history.editModal.noGrinder")}</option>
+              {grinders.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </Field>
+          {shot.category === "brew" && (
+            <Field label={t("history.editModal.basket")}>
+              <select
+                style={inputStyle}
+                value={basketId ?? ""}
+                onChange={(e) => setBasketId(e.target.value === "" ? null : Number(e.target.value))}
+              >
+                {basketId === null && <option value="">—</option>}
+                {baskets.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </Field>
+          )}
+        </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <Field label={t("history.editModal.grindSetting")}>
@@ -338,8 +362,9 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
 
       {ratingOpen && (
         <RatingModal
+          shotId={shot.id}
           initial={rv}
-          headerLabel={shot.shotSize === "single" ? "1×" : "2×"}
+          headerLabel={basketName(baskets, shot.basketId) ?? (shot.shotSize === "single" ? "1×" : "2×")}
           cancelLabel={t("shotRating.cancel")}
           onSave={async (v) => {
             await onSave(ratingValuesToPatch(v));

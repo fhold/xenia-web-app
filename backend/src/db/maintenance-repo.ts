@@ -16,8 +16,8 @@ export interface MaintenanceRunInput {
 
 export interface MaintenanceLogRepo {
   insert(entry: MaintenanceRunInput): void;
-  /** Newest ran_at across the given script ids, or null if none logged. */
-  lastRanAt(scriptIds: number[]): number | null;
+  /** Newest ran_at across the given profile ids, or null if none logged. */
+  lastRanAt(profileIds: number[]): number | null;
 }
 
 export class SqliteMaintenanceLogRepo implements MaintenanceLogRepo {
@@ -30,14 +30,14 @@ export class SqliteMaintenanceLogRepo implements MaintenanceLogRepo {
       .run(entry.scriptId, entry.profileId, entry.scriptTitle, entry.ranAt);
   }
 
-  lastRanAt(scriptIds: number[]): number | null {
-    if (scriptIds.length === 0) return null;
-    const placeholders = scriptIds.map(() => "?").join(",");
+  lastRanAt(profileIds: number[]): number | null {
+    if (profileIds.length === 0) return null;
+    const placeholders = profileIds.map(() => "?").join(",");
     const row = getDb()
       .prepare(
-        `SELECT MAX(ran_at) AS last FROM maintenance_log WHERE script_id IN (${placeholders})`,
+        `SELECT MAX(ran_at) AS last FROM maintenance_log WHERE profile_id IN (${placeholders})`,
       )
-      .get(...scriptIds) as { last: number | null } | undefined;
+      .get(...profileIds) as { last: number | null } | undefined;
     return row?.last ?? null;
   }
 }

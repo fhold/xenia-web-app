@@ -7,10 +7,11 @@
  * Rating is optional: "Überspringen" / X close without saving.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X, Check, ShieldAlert, Package } from "lucide-react";
 import { RatingScreen } from "./RatingScreen.js";
 import type { ShotRatingValues } from "./RatingScreen.js";
+import type { ShotCompare } from "@shared/types";
 import { useTranslation } from "../i18n/index.js";
 import theme, { alpha } from "../theme.js";
 
@@ -18,6 +19,8 @@ const C = theme;
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
 
 interface RatingModalProps {
+  /** Der bewertete Bezug — fuer den Vergleich mit dem letzten Bezug derselben Sorte. */
+  shotId: number;
   initial: ShotRatingValues;
   /** Small mono label shown right of the title, e.g. "1× · 24.6 g". */
   headerLabel?: string;
@@ -55,7 +58,7 @@ interface RatingModalProps {
   onClose: () => void;
 }
 
-export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel, notice, resetPrompt, stockPrompt, onSave, onClose }: RatingModalProps) {
+export function RatingModal({ shotId, initial, headerLabel, mobile = false, cancelLabel, notice, resetPrompt, stockPrompt, onSave, onClose }: RatingModalProps) {
   const { t } = useTranslation();
   const [values, setValues] = useState<ShotRatingValues>(initial);
   const [saving, setSaving] = useState(false);
@@ -64,6 +67,28 @@ export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel,
   const [stockAnswered, setStockAnswered] = useState(false);
   const [nextBagId, setNextBagId] = useState<number | null>(stockPrompt?.candidates[0]?.id ?? null);
   const cancelText = cancelLabel ?? t("shotRating.skip");
+  // Vergleich nur, wenn die Einstellung an ist und es einen Vorgaenger gibt.
+  const [compareTo, setCompareTo] = useState<ShotCompare["previous"]>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/shots/${shotId}/compare`)
+      .then((r) => (r.ok ? (r.json() as Promise<ShotCompare>) : null))
+      .then((c) => { if (alive && c?.enabled) setCompareTo(c.previous); })
+      .catch(() => { /* ohne Vergleich weiter */ });
+    return () => { alive = false; };
+  }, [shotId]);
+
+  // Wegklicken (Hintergrund, X, Escape) verwirft nichts stillschweigend: mit
+  // Aenderungen fragt die Fusszeile erst nach. „Ueberspringen/Abbrechen“ bleibt
+  // die bewusste Entscheidung ohne Rueckfrage.
+  const dirty = JSON.stringify(values) !== JSON.stringify(initial);
+  const [askLeave, setAskLeave] = useState(false);
+  const requestClose = () => { if (dirty && !saving) setAskLeave(true); else onClose(); };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") requestClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const save = async () => {
     setSaving(true);
@@ -82,7 +107,7 @@ export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel,
 
   return (
     <div
-      onClick={onClose}
+      onClick={requestClose}
       style={{
         position: "fixed",
         inset: 0,
@@ -122,7 +147,7 @@ export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel,
             )}
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             title={cancelText}
             style={{
               background: "transparent",
@@ -268,7 +293,7 @@ export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel,
           </div>
         )}
 
-        <RatingScreen initial={values} onChange={setValues} mobile={mobile} />
+        <RatingScreen initial={values} onChange={setValues} mobile={mobile} compareTo={compareTo} />
 
         {saveError !== null && (
           <div
@@ -287,8 +312,35 @@ export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel,
           </div>
         )}
 
+        {/* Rueckfrage beim Wegklicken — ersetzt die Fusszeile, das Fenster waechst nicht. */}
+        {askLeave && (
+          <div ref={(el) => el?.scrollIntoView({ block: "nearest" })} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ flex: "1 1 160px", fontSize: 13, fontWeight: 600, color: C.txt }}>{t("shotRating.leaveAsk")}</span>
+            <button
+              onClick={() => setAskLeave(false)}
+              style={{ padding: "10px 14px", borderRadius: 10, background: "transparent", border: `1px solid ${C.bdr2}`, color: C.txtS, fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
+            >
+              {t("shotRating.leaveKeep")}
+            </button>
+            <button
+              onClick={onClose}
+              style={{ padding: "10px 14px", borderRadius: 10, background: "transparent", border: `1px solid ${C.bdr2}`, color: C.txtS, fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
+            >
+              {t("shotRating.leaveDiscard")}
+            </button>
+            <button
+              onClick={() => { void save(); }}
+              disabled={saving}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 16px", borderRadius: 10, background: C.accG2, border: `1px solid ${C.accB}`, color: C.acc, fontSize: 13, fontWeight: 600, cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1, fontFamily: "inherit" }}
+            >
+              <Check size={15} />
+              {t("shotRating.save")}
+            </button>
+          </div>
+        )}
+
         {/* Footer: cancel/skip (ghost, no write) + save (primary gradient) */}
-        <div style={{ display: "flex", gap: 10 }}>
+        {!askLeave && <div style={{ display: "flex", gap: 10 }}>
           <button
             onClick={onClose}
             style={{
@@ -330,7 +382,7 @@ export function RatingModal({ initial, headerLabel, mobile = false, cancelLabel,
             <Check size={15} />
             {t("shotRating.save")}
           </button>
-        </div>
+        </div>}
       </div>
     </div>
   );

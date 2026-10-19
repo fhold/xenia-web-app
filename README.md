@@ -66,6 +66,27 @@ into the unit, with `WorkingDirectory` set to `backend/` and
 The database uses WAL mode — back it up with `sqlite3 xenia.db ".backup backup.db"`,
 not by copying the file while the app runs.
 
+## Updating
+
+Run as the user that owns the checkout (not as root):
+
+```bash
+./update.sh            # back up the database, pull, install, build, restart
+./update.sh --dry-run  # only show what would happen
+```
+
+The script stops if a brew is running or if tracked files were changed locally.
+It backs up the database next to it (`xenia.db.bak-<date>-before-update`), pulls,
+runs `npm ci` and the build in both packages, and only then restarts the systemd
+service (with `sudo` if needed) and waits for `/health`. Database changes are
+applied automatically when the new version starts. If a step fails, it prints how
+to go back.
+
+It reads `DB_PATH` and `PORT` from the environment or from the service's
+`Environment=` lines; the service name defaults to `xenia-app.service`
+(override with `XENIA_SERVICE=…`). Without a systemd service it stops after the
+build — restart the app yourself.
+
 ## Install as an app on Android (full screen)
 
 Browsers install a web app as a standalone app (own icon, no address bar) only when

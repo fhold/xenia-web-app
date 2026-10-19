@@ -63,20 +63,3 @@ export function extractionMarks(s: RatedFields): ("under" | "over" | "channeling
   if (s.channeling) out.push("channeling");
   return out;
 }
-
-/**
- * Naechster Zustand des Channeling-Knopfs: aus → leicht → stark → aus.
- *
- * Ein Knopf statt drei, damit die Extraktions-Zeile im Bewertungsscreen ihre
- * drei Spalten behaelt: „leicht" kostet wie bisher einen Tipp, „stark" einen
- * mehr. Eine Markierung mit unbekannter Staerke (Altbestand, severity null)
- * steigt bei „leicht" ein, statt beim ersten Tipp zu verschwinden.
- */
-export function nextChanneling(
-  channeling: boolean,
-  severity: "light" | "strong" | null,
-): { channeling: boolean; channelingSeverity: "light" | "strong" | null } {
-  if (!channeling || severity === null) return { channeling: true, channelingSeverity: "light" };
-  if (severity === "light") return { channeling: true, channelingSeverity: "strong" };
-  return { channeling: false, channelingSeverity: null };
-}

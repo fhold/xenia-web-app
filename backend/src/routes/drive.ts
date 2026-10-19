@@ -22,6 +22,8 @@ import type {
 } from "../../../shared/src/types.js";
 import { checkMachineReadyToStart } from "../lib/start-gate.js";
 import { driveStartBody } from "../lib/body-schemas.js";
+import { resolveStart } from "../db/variant-repo.js";
+import { SqliteBasketRepo } from "../db/basket-repo.js";
 
 export function registerDriveRoutes(
   app: FastifyInstance,
@@ -63,7 +65,9 @@ export function registerDriveRoutes(
 
     const {
       profileId,
-      shotSize,
+      shotSize: requestedSize,
+      variantId,
+      basketId,
       yieldTargetOverrideG,
       beanId,
       beanLabel,
@@ -82,14 +86,31 @@ export function registerDriveRoutes(
       return res;
     }
 
+    // Schnitt 3d: mit Variante kommen Stufen und Yield aus ihr, shot_size folgt
+    // dem Siebtyp. Ohne Variante wie bisher der Platz aus shotSize.
+    const start = resolveStart(profile.variants ?? [], (id) => new SqliteBasketRepo().findById(id)?.type, { variantId, basketId, shotSize: requestedSize });
+    if (!start.ok) {
+      reply.status(400);
+      const res: ApiResponse = { ok: false, error: start.error };
+      return res;
+    }
+    if (start.fromVariant && !start.brewSteps) {
+      reply.status(400);
+      const res: ApiResponse = { ok: false, error: "Diese Variante läuft als Skript, nicht in der App." };
+      return res;
+    }
+    const shotSize = start.shotSize;
+
     // Cut-2: a drive is fully app-driven (paddle step sequence), it never runs a
     // machine script. The script_id is recorded only for provenance and may be
     // null for step-based profiles — no script configured is no longer an error.
-    const scriptId =
-      (shotSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble) ?? null;
+    const scriptId = start.fromVariant
+      ? null
+      : (requestedSize === "single" ? profile.scriptIdSingle : profile.scriptIdDouble) ?? null;
 
-    const profileYield =
-      shotSize === "single" ? profile.yieldTargetSingleG : profile.yieldTargetDoubleG;
+    const profileYield = start.fromVariant
+      ? start.yieldG
+      : requestedSize === "single" ? profile.yieldTargetSingleG : profile.yieldTargetDoubleG;
     const overrideValid =
       typeof yieldTargetOverrideG === "number" &&
       Number.isFinite(yieldTargetOverrideG) &&
@@ -109,8 +130,9 @@ export function registerDriveRoutes(
     // never clobber a driver default with `undefined`.
     let mergedOverrides = overrides;
     // 2× reuses the 1× sequence unless the profile carries a dedicated one.
-    const bp =
-      shotSize === "double"
+    const bp = start.fromVariant
+      ? start.brewSteps
+      : requestedSize === "double"
         ? (profile.brewStepsDouble ?? profile.brewSteps)
         : profile.brewSteps;
     if (bp) {
@@ -125,25 +147,32 @@ export function registerDriveRoutes(
         yieldTarget,
         {
           profileId,
+          variantId: start.variantId,
+          basketId: start.basketId,
           profileName: profile.name ?? null,
           scriptId,
           shotSize,
-          beanId: beanId ?? null,
-          beanLabel: beanLabel ?? null,
-          grinderId: grinderId ?? null,
-          grindSetting: grindSetting ?? null,
-          grinderRpm: grinderRpm ?? null,
-          doseG: doseG ?? null,
+          // Messlauf: aufgezeichnet, aber ohne Bohne/Muehle — er zaehlt nirgends.
+          ...(profile.kind === "test"
+            ? { category: "test" as const, beanId: null, beanLabel: null, grinderId: null, grindSetting: null, grinderRpm: null, doseG: null }
+            : {
+              beanId: beanId ?? null,
+              beanLabel: beanLabel ?? null,
+              grinderId: grinderId ?? null,
+              grindSetting: grindSetting ?? null,
+              grinderRpm: grinderRpm ?? null,
+              doseG: doseG ?? null,
+            }),
           notes: notes ?? null,
         },
         getLastFrame(),
       );
 
       // Persist active bean/grinder for the next pre-shot dialog (parity with execute).
-      if (beanId !== undefined && beanId !== null) {
+      if (profile.kind !== "test" && beanId !== undefined && beanId !== null) {
         settingsRepo.set("active_bean_id", String(beanId));
       }
-      if (grinderId !== undefined && grinderId !== null) {
+      if (profile.kind !== "test" && grinderId !== undefined && grinderId !== null) {
         settingsRepo.set("active_grinder_id", String(grinderId));
       }
 

@@ -16,11 +16,13 @@ import { ratingValuesToPatch } from "./RatingScreen.js";
 import { hasRating, extractionMarks } from "@shared/shot-rating.js";
 import type { ShotRatingValues } from "./RatingScreen.js";
 import { stopModeLabel } from "../lib/stopMode.js";
+import { formatDay } from "../lib/dates.js";
 import { useShotDetail } from "../hooks/useShotDetail.js";
 import { useChartSettings } from "../hooks/useChartSettings.js";
 import { buildScriptOverlay } from "@shared/script-overlay.js";
 import { flowStageStrip, scriptStageStrip, flowPreinfusionEndS, firstDropS } from "@shared/stage-strip.js";
 import { useBreakpoint } from "../hooks/useBreakpoint.js";
+import { useBaskets, basketName } from "../hooks/useBaskets.js";
 import { HoverTip } from "./HoverTip.js";
 import { useTranslation } from "../i18n/index.js";
 import type { ChartSample } from "../hooks/useShotSamples.js";
@@ -33,14 +35,9 @@ const C = theme;
 const BEST = C.acc;
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
 
+/** Bezugsdatum mit Uhrzeit — Jahr nur, wenn nicht das laufende (lib/dates). */
 function formatDateTime(ms: number, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(ms));
+  return formatDay(ms, { time: true, locale });
 }
 
 function formatDuration(ms: number): string {
@@ -208,6 +205,8 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
     tasteTags: shot.tasteTags ?? [],
     grindNote: shot.grindNote,
     notes: shot.notes ?? "",
+    vsPrev: shot.vsPrev ?? null,
+    vsPrevShotId: shot.vsPrevShotId ?? null,
   });
   const [ratingOpen, setRatingOpen] = useState(false);
   const [editHover, setEditHover] = useState(false);
@@ -408,7 +407,9 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
       : "—";
   const duration =
     shot.endedAt !== null ? formatDuration(shot.endedAt - shot.startedAt) : "—";
-  const sizeLabel = shot.shotSize === "single" ? "1×" : "2×";
+  const { baskets } = useBaskets();
+  // Schnitt 3e: das benutzte Sieb; aeltere Bezuege ohne Sieb wie bisher 1×/2×.
+  const sizeLabel = basketName(baskets, shot.basketId) ?? (shot.shotSize === "single" ? "1×" : "2×");
   const locale = lang === "de" ? "de-DE" : "en-US";
 
   const hasNotes = shot.notes !== null && shot.notes.trim() !== "";
@@ -829,6 +830,11 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
                     {t("shotRating.grind")}: {t(grindLabelKey)}
                   </div>
                 )}
+                {rv.vsPrev !== null && (
+                  <div style={{ fontSize: 12, color: rv.vsPrev === "better" ? C.grn : rv.vsPrev === "worse" ? C.org : C.txtS }}>
+                    {t("shotRating.vsPrev.detail")}: {t(`shotRating.vsPrev.${rv.vsPrev}`)}
+                  </div>
+                )}
                 {rv.tasteTags.length > 0 && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 1 }}>
                     {rv.tasteTags.map((tg) => (
@@ -937,8 +943,9 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
 
     {ratingOpen && (
       <RatingModal
+        shotId={shot.id}
         initial={rv}
-        headerLabel={shot.shotSize === "single" ? "1×" : "2×"}
+        headerLabel={sizeLabel}
         mobile={mobile}
         cancelLabel={t("shotRating.cancel")}
         onSave={async (v) => { await onUpdate(ratingValuesToPatch(v)); setRv(v); }}

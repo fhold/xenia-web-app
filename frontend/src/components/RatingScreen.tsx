@@ -6,9 +6,13 @@
  *   Row 1: Gesamtnote        | Säure            | Bitterkeit
  *   Row 2: Extraktion        | Geschmacks-Tags (span 2)
  *   Row 3: Mahlgrad          | Notiz           (span 2)
+ *          (mit Vergleich: Mahlgrad | Gegenüber letztem Bezug | Notiz — gleiche Höhe)
  *
- * Extraction is three INDEPENDENT toggles (under / over / channeling) — there is
- * no derived "uneven" state anymore; channeling is its own marker (red).
+ * Extraction: two independent toggles (under / over) and, below them, the
+ * channeling strength as one choice keins / leicht / stark — one tap each. The
+ * former single button cycled off → light → strong and lost the second tap
+ * (#264). Both rows together stay lower than the taste tile beside them, so the
+ * window does not grow.
  *
  * All elements are optional. Self-contained (seeds from `initial`); reports the
  * current values via `onChange` on every edit. Parent owns Save/Skip.
@@ -18,8 +22,8 @@ import { useState } from "react";
 import { Check, ArrowDown, ArrowUp, Split } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { TASTE_TAGS } from "@shared/types";
-import type { GrindNote, TasteTag, ShotUpdate, ChannelingSeverity } from "@shared/types";
-import { nextChanneling } from "@shared/shot-rating.js";
+import type { GrindNote, TasteTag, ShotUpdate, ChannelingSeverity, ShotCompare, VsPrev } from "@shared/types";
+import { formatDay } from "../lib/dates.js";
 import theme, { alpha } from "../theme.js";
 
 const C = theme;
@@ -42,6 +46,9 @@ export interface ShotRatingValues {
   grindNote: GrindNote | null;
   /** Free-text note, bound to shot.notes. */
   notes: string;
+  /** Geschmack gegenueber dem letzten Bezug derselben Sorte, und welcher das war. */
+  vsPrev: VsPrev | null;
+  vsPrevShotId: number | null;
 }
 
 /** Map the rating control's values to a PUT /api/shots/:id patch. */
@@ -57,6 +64,8 @@ export function ratingValuesToPatch(v: ShotRatingValues): ShotUpdate {
     tasteTags: v.tasteTags.length > 0 ? v.tasteTags : null,
     grindNote: v.grindNote,
     notes: v.notes.trim() || null,
+    vsPrev: v.vsPrev,
+    vsPrevShotId: v.vsPrev ? v.vsPrevShotId : null,
   };
 }
 
@@ -65,6 +74,8 @@ interface RatingScreenProps {
   onChange: (v: ShotRatingValues) => void;
   /** Single-column layout for narrow (phone) widths. */
   mobile?: boolean;
+  /** Letzter Bezug derselben Sorte — nur gesetzt, wenn die Einstellung an ist. */
+  compareTo?: ShotCompare["previous"];
 }
 
 const labelRow: React.CSSProperties = {
@@ -145,7 +156,7 @@ function IntensityAxis({
   );
 }
 
-export function RatingScreen({ initial, onChange, mobile = false }: RatingScreenProps) {
+export function RatingScreen({ initial, onChange, mobile = false, compareTo = null }: RatingScreenProps) {
   const { t } = useTranslation();
   const [v, setV] = useState<ShotRatingValues>(initial);
 
@@ -244,60 +255,99 @@ export function RatingScreen({ initial, onChange, mobile = false }: RatingScreen
         />
       </div>
 
-      {/* 4 — Extraktion: drei unabhängige Toggles (under / over / channeling) */}
+      {/* 4 — Extraktion: zwei Toggles (under / over), darunter die Channeling-Staerke
+          als eine Auswahl. Beide Zeilen 30 px hoch — zusammen niedriger als die
+          Geschmacks-Kachel daneben, das Fenster waechst nicht. */}
       <div style={tile()}>
         <div style={labelRow}>{t("shotRating.extraction")}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {([
-            ["under",      v.extractionUnder, t("shotRating.under"),      <ArrowDown key="i" size={15} />, false],
-            ["over",       v.extractionOver,  t("shotRating.over"),       <ArrowUp key="i" size={15} />,   false],
-            ["channeling", v.channeling,
-              v.channeling && v.channelingSeverity
-                ? `${t("shotRating.channeling")} · ${t(v.channelingSeverity === "strong" ? "shotRating.channelingStrong" : "shotRating.channelingLight")}`
-                : t("shotRating.channeling"),
-              <Split key="i" size={15} />, true],
-          ] as ["under" | "over" | "channeling", boolean, string, React.ReactNode, boolean][]).map(
-            ([key, active, label, icon, isDefect]) => {
-              // Channeling is a defect marker → red when active; under/over stay amber.
-              const activeColor = isDefect ? C.red : C.org;
-              const activeBg = isDefect ? C.redD : C.orgD;
+            ["under", v.extractionUnder, t("shotRating.under"), <ArrowDown key="i" size={14} />],
+            ["over",  v.extractionOver,  t("shotRating.over"),  <ArrowUp key="i" size={14} />],
+          ] as ["under" | "over", boolean, string, React.ReactNode][]).map(([key, active, label, icon]) => (
+            <button
+              key={key}
+              onClick={() => { patch(key === "under" ? { extractionUnder: !active } : { extractionOver: !active }); }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: 30,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 5,
+                padding: "0 4px",
+                borderRadius: 10,
+                fontSize: 11,
+                fontWeight: 600,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                color: active ? C.org : C.txtS,
+                background: active ? C.orgD : C.bg,
+                border: `1.5px solid ${active ? `${C.org}80` : C.bdr2}`,
+                transition: "background 0.12s, border-color 0.12s, color 0.12s",
+              }}
+            >
+              {icon}
+              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* Rot, wenn markiert — auch beim Altbestand ohne Staerke, wo keine
+              der drei Wahlen leuchtet. */}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: v.channeling ? C.red : C.txtS, flexShrink: 0 }}>
+            <Split size={14} />
+            {t("shotRating.channeling")}
+          </span>
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              height: 30,
+              borderRadius: 10,
+              border: `1.5px solid ${C.bdr2}`,
+              background: C.bg,
+              overflow: "hidden",
+            }}
+          >
+            {([
+              ["none",   t("shotRating.channelingNone"),   C.rateOk, alpha(C.grn, 0.13)],
+              ["light",  t("shotRating.channelingLight"),  C.org,    C.orgD],
+              ["strong", t("shotRating.channelingStrong"), C.red,    C.redD],
+            ] as ["none" | ChannelingSeverity, string, string, string][]).map(([choice, label, col, bg], i) => {
+              const active = choice === "none" ? !v.channeling : v.channeling && v.channelingSeverity === choice;
               return (
                 <button
-                  key={key}
+                  key={choice}
                   onClick={() => {
-                    patch(
-                      key === "under" ? { extractionUnder: !active }
-                        : key === "over" ? { extractionOver: !active }
-                        // Durchschalten aus → leicht → stark → aus (shared/shot-rating.ts).
-                        : nextChanneling(v.channeling, v.channelingSeverity),
-                    );
+                    patch(choice === "none"
+                      ? { channeling: false, channelingSeverity: null }
+                      : { channeling: true, channelingSeverity: choice });
                   }}
                   style={{
                     flex: 1,
-                    minWidth: 0, // allow equal thirds to shrink; labels wrap instead of clipping
+                    minWidth: 0,
                     display: "flex",
-                    flexDirection: "column",
                     alignItems: "center",
                     justifyContent: "center",
-                    gap: 5,
-                    padding: "7px 2px",
-                    borderRadius: 10,
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: 600,
                     fontFamily: "inherit",
                     cursor: "pointer",
-                    color: active ? activeColor : C.txtS,
-                    background: active ? activeBg : C.bg,
-                    border: `1.5px solid ${active ? `${activeColor}80` : C.bdr2}`,
-                    transition: "background 0.12s, border-color 0.12s, color 0.12s",
+                    color: active ? col : C.mut,
+                    background: active ? bg : "transparent",
+                    border: "none",
+                    borderLeft: i > 0 ? `1px solid ${C.bdr2}` : "none",
+                    transition: "background 0.12s, color 0.12s",
                   }}
                 >
-                  {icon}
-                  <span style={{ textAlign: "center", lineHeight: 1.15, overflowWrap: "anywhere" }}>{label}</span>
+                  {label}
                 </button>
               );
-            },
-          )}
+            })}
+          </div>
         </div>
       </div>
 
@@ -394,8 +444,66 @@ export function RatingScreen({ initial, onChange, mobile = false }: RatingScreen
         </div>
       </div>
 
-      {/* 7 — Notiz (shot.notes) (span 2) */}
-      <div style={tile(true)}>
+      {/* 6b — Gegenueber dem letzten Bezug derselben Sorte (Einstellung); gleiche
+          Hoehe wie der Mahlgrad, die Notiz rueckt dafuer auf eine Spalte. */}
+      {compareTo && (
+        <div
+          style={tile()}
+          title={t("shotRating.vsPrev.title", {
+            date: formatDay(compareTo.startedAt, { time: true }),
+            profile: compareTo.profileName ?? "–",
+            grind: compareTo.grindSetting !== null ? String(compareTo.grindSetting).replace(".", ",") : "–",
+          })}
+        >
+          <div style={labelRow}>{t("shotRating.vsPrev.label", { date: formatDay(compareTo.startedAt, { style: "numeric" }) })}</div>
+          <div
+            style={{
+              display: "flex",
+              height: 40,
+              borderRadius: 12,
+              border: `1.5px solid ${C.bdr2}`,
+              background: C.bg,
+              overflow: "hidden",
+            }}
+          >
+            {([
+              ["worse", t("shotRating.vsPrev.worse"), C.org, C.orgD],
+              ["same", t("shotRating.vsPrev.same"), C.acc, C.accG],
+              ["better", t("shotRating.vsPrev.better"), C.rateOk, alpha(C.grn, 0.13)],
+            ] as [VsPrev, string, string, string][]).map(([choice, label, col, bg], i) => {
+              const active = v.vsPrev === choice;
+              return (
+                <button
+                  key={choice}
+                  onClick={() => {
+                    patch(active ? { vsPrev: null, vsPrevShotId: null } : { vsPrev: choice, vsPrevShotId: compareTo.id });
+                  }}
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: "inherit",
+                    cursor: "pointer",
+                    color: active ? col : C.mut,
+                    background: active ? bg : "transparent",
+                    border: "none",
+                    borderLeft: i > 0 ? `1px solid ${C.bdr2}` : "none",
+                    transition: "background 0.12s, color 0.12s",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 7 — Notiz (shot.notes) (span 2, mit Vergleich eine Spalte) */}
+      <div style={tile(!compareTo)}>
         <div style={labelRow}>{t("shotRating.notes")}</div>
         <textarea
           value={v.notes}

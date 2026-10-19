@@ -1,0 +1,443 @@
+{
+ "_note": "Maschinen-Skripte und Profile am 2026-10-15 (Xenia DBL, FW 4.255), inkl. an der Maschine geloeschter Skripte. Grundlage der Rundreise-Tests fuer profile-phases.ts.",
+ "scripts": [
+  {
+   "id": 10,
+   "title": "80s Decent",
+   "content": "1;9 0;8 0;13;4 3800 2000;12 10000;4 7800 3000;12 5000;4 5000 40000;12 45000;17;7;"
+  },
+  {
+   "id": 11,
+   "title": "80s Decent PI",
+   "content": "1;9 0;8 0;13;4 3800 2000;26 3800;12 3000;4 7800 3000;12 5000;4 5000 40000;12 45000;17;7;"
+  },
+  {
+   "id": 12,
+   "title": "80s",
+   "content": "1;9 0;8 0;13;4 9000 5000;12 45000;17;7;"
+  },
+  {
+   "id": 13,
+   "title": "medium brew solo",
+   "content": "1;13;4 6000 2000;12 60000;7;"
+  },
+  {
+   "id": 14,
+   "title": "Decaf",
+   "content": "1;13;4 2500 13000;12 13000;4 6500 8000;12 8000;4 5000 12000;12 12000;4 4000 30000;12 80000;17;7;"
+  },
+  {
+   "id": 15,
+   "title": "Spülen",
+   "content": "1;13;3 100 10000;12 12000;14;17;7;"
+  },
+  {
+   "id": 16,
+   "title": "Turbo Shot",
+   "content": "1;13;4 6000 5000;12 40000;17;7;"
+  },
+  {
+   "id": 17,
+   "title": "Soup",
+   "content": "1;13;4 700 20000;12 60000;7;"
+  },
+  {
+   "id": 18,
+   "title": "Blooming Espresso",
+   "content": "1;13;4 6000 3000;12 9000;6;12 30000;4 8000 3000;12 35000;17;7;"
+  },
+  {
+   "id": 19,
+   "title": "Londinium Single",
+   "content": "1;13;4 1100 1000;12 15000;4 9000 2000;12 5000;4 4000 45000;12 60000;17;7;"
+  },
+  {
+   "id": 20,
+   "title": "9bar Classic",
+   "content": "1;13;4 9000 1000;12 60000;17;7;"
+  },
+  {
+   "id": 21,
+   "title": "Classic Espresso",
+   "content": "1;13;4 9000 5000;12 45000;17;7;"
+  },
+  {
+   "id": 25,
+   "title": "Soup up",
+   "content": "1;13;4 400 15000;12 15000;6;12 30000;7;"
+  },
+  {
+   "id": 26,
+   "title": "Cleaning",
+   "content": "1;13;4 9000 1000;12 20000;6;15;12 20000;16;4 9000 1000;12 15000;6;15;12 20000;16;4 9000 1000;12 15000;6;15;12 20000;16;4 9000 1000;12 15000;6;15;12 20000;16;4 9000 1000;12 20000;17;20 1 1000;20 1 1000;7;"
+  },
+  {
+   "id": 28,
+   "title": "Londinium Double",
+   "content": "1;13;4 3000 1000;12 20000;4 9000 2000;12 10000;4 4000 45000;12 60000;17;7;"
+  },
+  {
+   "id": 29,
+   "title": "6bar flat PI",
+   "content": "1;13;4 1000 1000;12 15000;4 6000 4000;12 75000;7;"
+  },
+  {
+   "id": 30,
+   "title": "6bar Bloom KN",
+   "content": "1;13;4 2000 2000;12 10000;6;12 12000;4 6000 2000;12 60000;7;"
+  },
+  {
+   "id": 31,
+   "title": "Londinium sanfte Rampe",
+   "content": "1;13;4 1100 1000;12 25000;4 9000 7000;12 10000;4 4000 20000;12 60000;17;7;"
+  }
+ ],
+ "profiles": [
+  {
+   "id": 1,
+   "name": "Londinium",
+   "scriptIdSingle": 19,
+   "scriptIdDouble": 28,
+   "yieldTargetSingleG": 25.0,
+   "yieldTargetDoubleG": 36.0,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 2,
+   "name": "Rückspülen",
+   "scriptIdSingle": 26,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": null,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 3,
+   "name": "80s Espresso",
+   "scriptIdSingle": 12,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 20.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 5,
+   "name": "Decaf",
+   "scriptIdSingle": 14,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 28.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 6,
+   "name": "9bar Classic",
+   "scriptIdSingle": 21,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 25.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 7,
+   "name": "Flush",
+   "scriptIdSingle": 15,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": null,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 10,
+   "name": "Decaf Flow (PI)",
+   "scriptIdSingle": null,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 28.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": {
+    "version": 1,
+    "steps": [
+     {
+      "kind": "power",
+      "power": 28,
+      "exit": {
+       "seconds": 15,
+       "weightG": 1
+      },
+      "rampMs": 3000
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 1,
+      "exit": {
+       "weightG": 18
+      },
+      "rampMs": 5000
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 0.7,
+      "exit": {
+       "weightG": 28
+      },
+      "rampMs": 3000
+     }
+    ]
+   },
+   "brewStepsDouble": null
+  },
+  {
+   "id": 11,
+   "name": "Adaptive Gagne 1:2",
+   "scriptIdSingle": null,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 27.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": {
+    "version": 1,
+    "steps": [
+     {
+      "kind": "power",
+      "power": 45,
+      "exit": {
+       "seconds": 15,
+       "pressureBar": 4,
+       "weightG": 2
+      },
+      "rampMs": 3000
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 1.1,
+      "exit": {
+       "seconds": 8
+      },
+      "maxPressureBar": 9,
+      "rampMs": 4000
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 1,
+      "exit": {
+       "seconds": 25,
+       "flowGs": 0.85
+      },
+      "maxPressureBar": 9,
+      "rampMs": 0
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 0.8,
+      "exit": {
+       "seconds": 25,
+       "flowGs": 0.65
+      },
+      "maxPressureBar": 9,
+      "rampMs": 0
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 0.7,
+      "exit": {
+       "weightG": 27
+      },
+      "maxPressureBar": 9,
+      "rampMs": 0
+     }
+    ]
+   },
+   "brewStepsDouble": null
+  },
+  {
+   "id": 12,
+   "name": "Turbo",
+   "scriptIdSingle": 16,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 45.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 14,
+   "name": "Filter 5:1 + Bypass (Pourover)",
+   "scriptIdSingle": null,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 75.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": {
+    "version": 1,
+    "steps": [
+     {
+      "kind": "power",
+      "power": 18,
+      "exit": {
+       "seconds": 45,
+       "weightG": 0.5
+      },
+      "name": "Preinfusion",
+      "rampMs": 0
+     },
+     {
+      "kind": "power",
+      "power": 0,
+      "exit": {
+       "seconds": 120
+      },
+      "name": "Bloom",
+      "rampMs": 0
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 2.5,
+      "exit": {
+       "weightG": 75
+      },
+      "name": "Extraction",
+      "maxPressureBar": 3,
+      "rampMs": 12000
+     }
+    ]
+   },
+   "brewStepsDouble": null
+  },
+  {
+   "id": 15,
+   "name": "Londinium sanfte Rampe",
+   "scriptIdSingle": 31,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 25.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 16,
+   "name": "Lever Style (Meticulous)",
+   "scriptIdSingle": null,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 24.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": {
+    "version": 1,
+    "steps": [
+     {
+      "kind": "preinfusion",
+      "name": "Füllen",
+      "gentleness": "normal",
+      "exit": {
+       "seconds": 22,
+       "weightG": 5,
+       "pressureBar": 6.5
+      }
+     },
+     {
+      "kind": "flow",
+      "name": "Konstanter Flow",
+      "targetFlowGs": 1.4,
+      "rampMs": 3000,
+      "maxPressureBar": 9,
+      "exit": {}
+     }
+    ]
+   },
+   "brewStepsDouble": null
+  },
+  {
+   "id": 17,
+   "name": "6bar flat",
+   "scriptIdSingle": 30,
+   "scriptIdDouble": 30,
+   "yieldTargetSingleG": 24.0,
+   "yieldTargetDoubleG": 36.0,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 19,
+   "name": "Adaptive Gagne 1:2 · Zulauf-PI",
+   "scriptIdSingle": null,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 27.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": {
+    "version": 1,
+    "steps": [
+     {
+      "kind": "preinfusion",
+      "gentleness": "normal",
+      "exit": {
+       "seconds": 25,
+       "pressureBar": 4
+      }
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 1.1,
+      "exit": {
+       "seconds": 8
+      },
+      "maxPressureBar": 9,
+      "rampMs": 4000
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 1,
+      "exit": {
+       "seconds": 25,
+       "flowGs": 0.85
+      },
+      "maxPressureBar": 9,
+      "rampMs": 0
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 0.8,
+      "exit": {
+       "seconds": 25,
+       "flowGs": 0.65
+      },
+      "maxPressureBar": 9,
+      "rampMs": 0
+     },
+     {
+      "kind": "flow",
+      "targetFlowGs": 0.7,
+      "exit": {
+       "weightG": 27
+      },
+      "maxPressureBar": 9,
+      "rampMs": 0
+     }
+    ]
+   },
+   "brewStepsDouble": null
+  },
+  {
+   "id": 20,
+   "name": "80s Decent",
+   "scriptIdSingle": 10,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 20.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  },
+  {
+   "id": 21,
+   "name": "80s Decent PI",
+   "scriptIdSingle": 11,
+   "scriptIdDouble": null,
+   "yieldTargetSingleG": 20.0,
+   "yieldTargetDoubleG": null,
+   "brewSteps": null,
+   "brewStepsDouble": null
+  }
+ ]
+}

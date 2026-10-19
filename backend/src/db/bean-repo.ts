@@ -67,7 +67,7 @@ const BEAN_SELECT = `
          c.altitude_max AS cf_altitude_max, c.roast_level AS cf_roast_level,
          c.brew_type AS cf_brew_type, c.flavor_notes AS cf_flavor_notes,
          c.notes AS cf_notes, c.favourite AS cf_favourite, c.rating AS cf_rating,
-         (SELECT COUNT(*) FROM shot s WHERE s.bean_id = b.id) AS shot_count,
+         (SELECT COUNT(*) FROM shot s WHERE s.bean_id = b.id AND s.category = 'brew') AS shot_count,
          (SELECT COALESCE(SUM(s.dose_g), 0) FROM shot s
            WHERE s.bean_id = b.id
              AND s.category = 'brew'

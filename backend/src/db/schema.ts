@@ -3,6 +3,7 @@ import { getDb } from "./index.js";
 import { classifyPair } from "../lib/coffee-matching.js";
 import { extractionStarted } from "../../../shared/src/brew-phase.js";
 import { brewDefHash, canonicalBrewDef } from "./brew-def.js";
+import { ensureProfileVariants, backfillShotVariantBasket } from "./variant-repo.js";
 
 /**
  * Creates all tables if they don't exist yet.
@@ -1101,6 +1102,16 @@ export function migrateChannelingSeverity(db: DatabaseSync): void {
 }
 
 /**
+ * Geschmack gegenueber dem letzten Bezug derselben Sorte (Bewertung, Einstellung
+ * rating_compare_prev) und der Bezug, gegen den verglichen wurde. Idempotent,
+ * kein Backfill. Exportiert fuer den Test.
+ */
+export function migrateVsPrev(db: DatabaseSync): void {
+  addColumnIfMissing(db, "shot", "vs_prev", "TEXT CHECK(vs_prev IN ('worse','same','better'))");
+  addColumnIfMissing(db, "shot", "vs_prev_shot_id", "INTEGER REFERENCES shot(id) ON DELETE SET NULL");
+}
+
+/**
  * Profilversion ohne Stufennamen (2026-09-28): der Hash eines Flow-Ablaufs
  * deckt nur noch ab, was den Bezug bestimmt (s. canonicalBrewDef). Bestehende
  * 'steps'-Definitionen werden in die kanonische Form ueberfuehrt und ihre
@@ -1193,7 +1204,7 @@ export function applySchema(): void {
       profile_id     INTEGER REFERENCES profile(id) ON DELETE SET NULL,
       script_id      INTEGER REFERENCES xenia_script(id),
       shot_size      TEXT    NOT NULL CHECK(shot_size IN ('single','double')),
-      category       TEXT    NOT NULL CHECK(category IN ('brew','maintenance')),
+      category       TEXT    NOT NULL CHECK(category IN ('brew','maintenance','test')),
       started_at     INTEGER NOT NULL,   -- unix ms when first MA_STATUS=3 (or =5 for flow-hold) frame seen
       ended_at       INTEGER,            -- unix ms; NULL while shot is in progress
       stop_mode      TEXT    CHECK(stop_mode IN ('cmd27','app','app_failed','manual','script_end','watchdog','flowhold','flowhold_watchdog')),
@@ -1411,6 +1422,7 @@ export function applySchema(): void {
   // bewusst kein Backfill. Steht HINTER allen shot-Neuaufbauten mit fester
   // Spaltenliste, sonst ginge die Spalte bei einem frischen Aufbau verloren.
   migrateChannelingSeverity(db);
+  migrateVsPrev(db);
 
   // Widen the shot_sample.phase CHECK with the pre-infusion/extraction sub-phases.
   // Runs after phase AND pump_pwm are added so the rebuild lists both explicitly.
@@ -1625,4 +1637,166 @@ export function applySchema(): void {
 
     CREATE INDEX IF NOT EXISTS idx_grinder_name ON grinder(name ASC);
   `);
+
+  // ---------------------------------------------------------------------------
+  // Sieb (vereinter Editor, Schnitt 3b) — Ausruestung wie die Muehle. Beim
+  // ersten Anlegen kommen die zwei Siebe, die die App bisher als 1×/2× kannte;
+  // danach nie wieder (auch nicht, wenn Flavio alle loescht).
+  // ⚠ Englisch heisst das Teil „basket“, deutsch „Sieb“ — nie „sieve“ (falsch
+  // uebersetzt) und nie „Korb“. Am 16.10. lief die Tabelle kurz als `sieve`;
+  // die wird hier mit ihren Zeilen umbenannt.
+  // ---------------------------------------------------------------------------
+  const tableExists = (name: string) =>
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+  if (tableExists("sieve") && !tableExists("basket")) db.exec("ALTER TABLE sieve RENAME TO basket");
+  const basketExisted = tableExists("basket");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS basket (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      type        TEXT    NOT NULL CHECK(type IN ('single','double','he')),
+      created_at  INTEGER NOT NULL,   -- unix ms
+      updated_at  INTEGER NOT NULL    -- unix ms
+    );
+  `);
+  if (!basketExisted) {
+    const now = Date.now();
+    const ins = db.prepare("INSERT INTO basket (name, type, created_at, updated_at) VALUES (?, ?, ?, ?)");
+    ins.run("Einzelsieb", "single", now, now);
+    ins.run("Doppelsieb", "double", now, now);
+  }
+  migrateBasketDetails(db);
+
+  // ---------------------------------------------------------------------------
+  // Varianten (vereinter Editor, Schnitt 3a) — frei benannte Teilrezepte eines
+  // Profils mit Vorgabe-Sieb. Seit 3c fuehren sie; Profile ohne Varianten
+  // bekommen sie aus den alten Spalten (variant-repo.ts), Bezuege Variante und
+  // Sieb aus shot_size.
+  // ---------------------------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS profile_variant (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id        INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+      legacy_slot       TEXT    CHECK(legacy_slot IN ('single','double')),  -- Platz aus der 1×/2×-Welt, bis 3c
+      name              TEXT    NOT NULL,
+      sort_order        INTEGER NOT NULL,
+      default_basket_id INTEGER REFERENCES basket(id),
+      yield_g           REAL,
+      script_id         INTEGER REFERENCES xenia_script(id),
+      brew_steps        TEXT,   -- JSON BrewProfile (App-Variante)
+      same_as_id        INTEGER REFERENCES profile_variant(id) ON DELETE SET NULL,  -- „wie Variante X“
+      created_at        INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL,
+      UNIQUE(profile_id, legacy_slot)
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_variant_profile ON profile_variant(profile_id, sort_order);
+  `);
+  // Phasennamen fuer Skript-Kurven (JSON, je Phasen-Index) — die Maschine kennt keine.
+  addColumnIfMissing(db, "profile_variant", "phase_names", "TEXT");
+  // Profil-Art (Schnitt 3): Bezug oder Wartung steht am Profil statt am Skript.
+  // Einmalig beim Anlegen der Spalte aus der Kategorie des Skripts der ersten
+  // Variante (Uebersteuerung vor Automatik) — danach entscheidet nur der Editor.
+  const freshKind = !(db.prepare("PRAGMA table_info(profile)").all() as Array<{ name: string }>).some((c) => c.name === "kind");
+  addColumnIfMissing(db, "profile", "kind", "TEXT NOT NULL DEFAULT 'brew' CHECK(kind IN ('brew','maintenance','test'))");
+  if (freshKind) adoptProfileKind(db);
+  // Versuch: ein Profil nur zum Ausprobieren (Kolben in Liste und Editor). Nur Anzeige.
+  addColumnIfMissing(db, "profile", "trial", "INTEGER NOT NULL DEFAULT 0");
+
+  const freshVariantColumn = !(db.prepare("PRAGMA table_info(shot)").all() as Array<{ name: string }>).some((c) => c.name === "variant_id");
+  addColumnIfMissing(db, "shot", "variant_id", "INTEGER REFERENCES profile_variant(id) ON DELETE SET NULL");
+  addColumnIfMissing(db, "shot", "basket_id",  "INTEGER REFERENCES basket(id)");
+  ensureProfileVariants();
+  backfillShotVariantBasket(freshVariantColumn);
+  migrateBackflushToProfiles(db);  // Zuletzt: der Neuaufbau aus der gespeicherten Definition nimmt alle bis
+  // hierher angelegten Spalten mit.
+  migrateTestCategory(db);
+}
+
+/**
+ * Art „Messlauf“ (2026-10-18): Messlaeufe werden aufgezeichnet, zaehlen aber
+ * nirgends. `shot.category` und `profile.kind` bekommen den Wert 'test'. SQLite
+ * kann eine CHECK-Einschraenkung nicht aendern — Neuaufbau aus der gespeicherten
+ * Tabellendefinition, also mit allen Spalten, Vorgaben und Fremdschluesseln;
+ * nur die Werteliste waechst. Idempotent: nur solange 'test' fehlt. Exportiert
+ * fuer den Test.
+ */
+export function migrateTestCategory(db: DatabaseSync): void {
+  widenCheck(db, "shot", "category", ["brew", "maintenance", "test"]);
+  widenCheck(db, "profile", "kind", ["brew", "maintenance", "test"]);
+}
+
+function widenCheck(db: DatabaseSync, table: string, column: string, values: string[]): void {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table) as { sql: string } | undefined;
+  if (!row) return;
+  const re = new RegExp(`CHECK\\s*\\(\\s*${column}\\s+IN\\s*\\(([^)]*)\\)\\s*\\)`);
+  const m = row.sql.match(re);
+  if (!m) return;
+  const have = m[1]!.split(",").map((v) => v.trim().replace(/^'|'$/g, ""));
+  if (values.every((v) => have.includes(v))) return;
+
+  const newSql = row.sql
+    .replace(re, `CHECK(${column} IN (${values.map((v) => `'${v}'`).join(",")}))`)
+    .replace(/^CREATE TABLE\s+(IF NOT EXISTS\s+)?"?[A-Za-z_]+"?/, `CREATE TABLE ${table}_new`);
+  const extras = db
+    .prepare("SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('index','trigger') AND sql IS NOT NULL")
+    .all(table) as { sql: string }[];
+  const seq = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'").get()
+    ? (db.prepare("SELECT seq FROM sqlite_sequence WHERE name = ?").get(table) as { seq: number } | undefined)
+    : undefined;
+
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  try {
+    db.exec(newSql);
+    db.exec(`INSERT INTO ${table}_new SELECT * FROM ${table}`);
+    db.exec(`DROP TABLE ${table}`);
+    db.exec(`ALTER TABLE ${table}_new RENAME TO ${table}`);
+    for (const x of extras) db.exec(x.sql);
+    if (seq) {
+      // Die naechste id bleibt, wo sie war — auch wenn die letzten Zeilen geloescht sind.
+      db.prepare("DELETE FROM sqlite_sequence WHERE name IN (?, ?)").run(table, `${table}_new`);
+      db.prepare(`INSERT INTO sqlite_sequence(name, seq) SELECT ?, MAX(CAST(? AS INTEGER), COALESCE((SELECT MAX(id) FROM ${table}), 0))`).run(table, seq.seq);
+    }
+    const broken = db.prepare("PRAGMA foreign_key_check").all();
+    if (broken.length > 0) throw new Error(`foreign_key_check nach Neuaufbau von ${table}: ${JSON.stringify(broken.slice(0, 3))}`);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    db.exec("PRAGMA foreign_keys = ON");
+    throw e;
+  }
+  db.exec("PRAGMA foreign_keys = ON");
+}
+
+/**
+ * Sieb: Beschreibung (frei, „HE-Basket Mischief, 18 Loecher“) und Nenndosis
+ * (Dosis-Vorschlag, solange es mit dem Sieb keinen Bezug gibt). Der Name bleibt
+ * kurz. Idempotent, kein Backfill. Exportiert fuer den Test.
+ */
+export function migrateBasketDetails(db: DatabaseSync): void {
+  addColumnIfMissing(db, "basket", "description", "TEXT");
+  addColumnIfMissing(db, "basket", "nominal_dose_g", "REAL");
+}
+
+/** Profil-Art aus der Kategorie des Skripts der ersten Variante (Uebersteuerung vor Automatik). */
+export function adoptProfileKind(db: DatabaseSync): void {
+  db.exec(`
+    UPDATE profile SET kind = 'maintenance'
+     WHERE script_single IN (SELECT id FROM xenia_script WHERE COALESCE(category_override, category_auto) = 'maintenance');
+  `);
+}
+
+/**
+ * Rueckspuel-Erinnerung am Profil (Schnitt 3): `backflush_profile_ids` ersetzt
+ * `backflush_script_ids` — einmalig uebernommen ueber die Varianten, die diese
+ * Skripte fahren. Das Wartungslog fuehrt die Profil-ID schon immer mit.
+ */
+export function migrateBackflushToProfiles(db: DatabaseSync): void {
+  if (db.prepare("SELECT 1 FROM settings WHERE key = 'backflush_profile_ids'").get()) return;
+  const raw = (db.prepare("SELECT value FROM settings WHERE key = 'backflush_script_ids'").get() as { value: string } | undefined)?.value ?? "";
+  const scriptIds = raw.split(",").map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n));
+  const profileIds = scriptIds.length === 0 ? [] : (db
+    .prepare(`SELECT DISTINCT profile_id AS id FROM profile_variant WHERE script_id IN (${scriptIds.map(() => "?").join(",")}) ORDER BY profile_id`)
+    .all(...scriptIds) as { id: number }[]).map((r) => r.id);
+  db.prepare("INSERT INTO settings (key, value) VALUES ('backflush_profile_ids', ?)").run(profileIds.join(","));
 }

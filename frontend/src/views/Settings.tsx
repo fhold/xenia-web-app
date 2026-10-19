@@ -13,9 +13,11 @@ import { Toggle } from "../components/Toggle.js";
 import { BackflushSettings } from "../components/BackflushSettings.js";
 import { GrinderEditor } from "../components/GrinderEditor.js";
 import { useGrinders } from "../hooks/useGrinders.js";
+import { BasketEditor } from "../components/BasketEditor.js";
+import { useBaskets } from "../hooks/useBaskets.js";
 import { useTranslation, setLanguage } from "../i18n/index.js";
 import type { Language } from "../i18n/index.js";
-import type { Grinder, GrinderCreate, GrinderUpdate } from "@shared/types.js";
+import type { Grinder, GrinderCreate, GrinderUpdate, Basket } from "@shared/types.js";
 import { normalizeMachineAddress } from "@shared/machine-address.js";
 import type { ConnectionState } from "../hooks/useXeniaFrame.js";
 import theme from "../theme.js";
@@ -58,6 +60,7 @@ interface FormState {
   brew_by_weight_watchdog_overshoot_g: string;
   // shot recording
   show_tds_input: boolean;
+  rating_compare_prev: boolean;
   // bean editor section visibility
   bean_fields_origin: boolean;
   bean_fields_inventory: boolean;
@@ -229,6 +232,8 @@ export function Settings({
   const [form, setForm] = useState<FormState | null>(null);
   const { grinders, create: createGrinder, update: updateGrinder, remove: removeGrinder } = useGrinders();
   const [grinderEditor, setGrinderEditor] = useState<Grinder | null | "new">(null);
+  const { baskets, create: createBasket, update: updateBasket, remove: removeBasket } = useBaskets();
+  const [basketEditor, setBasketEditor] = useState<Basket | null | "new">(null);
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [saveStatuses, setSaveStatuses] = useState<Record<string, SaveStatus>>({});
   const [loadError, setLoadError] = useState(false);
@@ -270,6 +275,7 @@ export function Settings({
           brew_by_weight_watchdog_stop_lag_ms: data["brew_by_weight_watchdog_stop_lag_ms"] ?? "3000",
           brew_by_weight_watchdog_overshoot_g: data["brew_by_weight_watchdog_overshoot_g"] ?? "7",
           show_tds_input:               (data["show_tds_input"] ?? "false") === "true",
+          rating_compare_prev:          (data["rating_compare_prev"] ?? "false") === "true",
           bean_fields_origin:           (data["bean_fields_origin"]       ?? "true") === "true",
           bean_fields_inventory:        (data["bean_fields_inventory"]    ?? "true") === "true",
           bean_fields_aroma:            (data["bean_fields_aroma"]        ?? "true") === "true",
@@ -924,6 +930,79 @@ export function Settings({
         {t("settings.grinders.add")}
       </button>
 
+      {/* ---- Siebe (wie die Mühlen: kurzer Name, Beschreibung, Nenndosis) ---- */}
+      <SectionHeader title={t("settings.baskets.title")} />
+
+      {baskets.length === 0 && (
+        <div style={{ fontSize: 12, color: C.mut, padding: "8px 0 4px" }}>
+          {t("settings.baskets.empty")}
+        </div>
+      )}
+
+      {baskets.map((sv) => (
+        <div
+          key={sv.id}
+          style={{ display: "flex", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.bdr}`, gap: 8 }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div>
+              <span style={{ fontSize: 13, color: C.txt, fontWeight: 500 }}>{sv.name}</span>
+              {sv.nominalDoseG !== null && (
+                <span style={{ fontSize: 11, color: C.mut, marginLeft: 8, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {String(sv.nominalDoseG).replace(".", ",")} g
+                </span>
+              )}
+            </div>
+            {sv.description && (
+              <div style={{ fontSize: 11, color: C.mut, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {sv.description}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setBasketEditor(sv)}
+            title={t("settings.baskets.editTitle")}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: C.mut, display: "flex", padding: "2px 4px" }}
+          >
+            <Pencil size={13} />
+          </button>
+          <button
+            onClick={async () => {
+              if (window.confirm(t("settings.baskets.deleteConfirm"))) {
+                // Benutzte Siebe lehnt der Server ab — die Begruendung muss sichtbar sein.
+                try { await removeBasket(sv.id); } catch (e) { window.alert(e instanceof Error ? e.message : String(e)); }
+              }
+            }}
+            title={t("settings.baskets.delete")}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: C.mut, display: "flex", padding: "2px 4px" }}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+
+      <button
+        onClick={() => setBasketEditor("new")}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginTop: 10,
+          background: "transparent",
+          border: `1px dashed ${C.bdr}`,
+          borderRadius: 8,
+          padding: "7px 14px",
+          color: C.mut,
+          fontSize: 12,
+          cursor: "pointer",
+          width: "100%",
+          justifyContent: "center",
+        }}
+      >
+        <Plus size={13} />
+        {t("settings.baskets.add")}
+      </button>
+
       {/* ---- Bohnen-Eingabe-Felder ---- */}
       <SectionHeader title={t("settings.beanFields.title")} />
 
@@ -1083,6 +1162,21 @@ export function Settings({
         />
       </Row>
 
+      <Row
+        label={t("settings.shotInput.comparePrev.label")}
+        description={t("settings.shotInput.comparePrev.description")}
+        saveStatus={saveStatuses["rating_compare_prev"]}
+        {...rowProps}
+      >
+        <Toggle
+          checked={form.rating_compare_prev}
+          onChange={(val) => {
+            setField("rating_compare_prev", val);
+            void saveToggle("rating_compare_prev", val);
+          }}
+        />
+      </Row>
+
       {/* ---- Sprache ---- */}
       <SectionHeader title={t("settings.language.title")} />
 
@@ -1140,6 +1234,19 @@ export function Settings({
               : undefined
           }
           onClose={() => setGrinderEditor(null)}
+        />
+      )}
+
+      {/* BasketEditor modal */}
+      {basketEditor !== null && (
+        <BasketEditor
+          basket={basketEditor === "new" ? undefined : basketEditor}
+          onSave={async (data) => {
+            if (basketEditor === "new") await createBasket(data);
+            else await updateBasket(basketEditor.id, data);
+          }}
+          onDelete={basketEditor !== "new" ? async () => { await removeBasket(basketEditor.id); } : undefined}
+          onClose={() => setBasketEditor(null)}
         />
       )}
     </div>

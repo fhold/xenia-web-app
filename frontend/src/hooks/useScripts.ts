@@ -9,7 +9,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `HTTP ${res.status}`);
+    // Mit Status: der Editor bietet bei 507 (kein freier Platz) Aufraeumen an.
+    throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status });
   }
   return res.json() as Promise<T>;
 }
@@ -28,10 +29,6 @@ export interface UseScriptsReturn {
   refetch: () => Promise<void>;
   /** SE-2b: shallow sync (ids + titles) from the machine, then refetch the list. */
   refreshList: () => Promise<void>;
-  /** SE-2b: re-read ONE script's content from the machine, then refetch. */
-  syncScript: (id: number) => Promise<void>;
-  /** SE-2: set/clear the manual category override (local), then refetch. */
-  setCategoryOverride: (id: number, override: "brew" | "maintenance" | null) => Promise<void>;
   /** Editor: neues Skript auf dem kleinsten freien, sichtbaren Platz anlegen. */
   createScript: (title: string, content: string) => Promise<XeniaScript>;
   /** Editor: an Ort und Stelle ueberschreiben — nur, wenn die Maschine noch
@@ -80,23 +77,6 @@ export function useScripts(): UseScriptsReturn {
     await fetchScripts();
   }, [fetchScripts]);
 
-  const syncScript = useCallback(async (id: number): Promise<void> => {
-    await apiFetch(`/api/scripts/${id}/sync`, { method: "POST" });
-    await fetchScripts();
-  }, [fetchScripts]);
-
-  const setCategoryOverride = useCallback(
-    async (id: number, override: "brew" | "maintenance" | null): Promise<void> => {
-      await apiFetch(`/api/scripts/${id}/category-override`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ override }),
-      });
-      await fetchScripts();
-    },
-    [fetchScripts],
-  );
-
   const createScript = useCallback(async (title: string, content: string): Promise<XeniaScript> => {
     const script = await apiFetch<XeniaScript>("/api/scripts", {
       method: "POST",
@@ -132,7 +112,7 @@ export function useScripts(): UseScriptsReturn {
   }, [fetchScripts]);
 
   return {
-    scripts, loading, error, syncScripts, refetch: fetchScripts, refreshList, syncScript, setCategoryOverride,
+    scripts, loading, error, syncScripts, refetch: fetchScripts, refreshList,
     createScript, updateScript, deleteScript,
   };
 }

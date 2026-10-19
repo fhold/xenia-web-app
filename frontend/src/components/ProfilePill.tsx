@@ -1,6 +1,7 @@
 /**
  * Favorite profile chip for the Dashboard header (Variante C).
- * Accent-tinted, natural width; tapping opens the ShotSizePicker flow.
+ * Accent-tinted, natural width; tapping opens the pre-shot dialog directly
+ * (Einzel/Doppel is chosen there).
  */
 
 import { Coffee } from "lucide-react";

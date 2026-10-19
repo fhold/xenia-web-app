@@ -5,13 +5,14 @@
  * Each token is: <cmd_id> [arg1] [arg2] ...
  * Example: "1;13;4 9000 3000;12 60000;17;7;"
  *
- * Reference: Handoff 2.8 (Cmd Dictionary).
+ * Reference: Handoff 2.8 (Cmd Dictionary), ergaenzt um die offizielle Befehlsliste
+ * aus dem Skript-Editor der Maschine (FW 4.255: Cmd 26, 32, 33, 34).
  */
 
 import type { ParsedCmd, ParsedScript } from "./types.js";
 
 // ---------------------------------------------------------------------------
-// Cmd dictionary (Handoff 2.8 — all 22 commands)
+// Cmd dictionary (Handoff 2.8 + Skript-Editor der Maschine, FW 4.255)
 // ---------------------------------------------------------------------------
 
 interface CmdEntry {
@@ -38,11 +39,15 @@ const CMD_DICTIONARY: Record<number, CmdEntry> = {
   17: { de: "Entleeren & Beenden",             en: "Drain and finish",       args: [] },
   20: { de: "Signalton",                        en: "Signal tone",            args: ["count", "duration_ms"] },
   25: { de: "Warten Solltemperatur °C",        en: "Wait for target temp",   args: ["temp_C"] },
+  26: { de: "Warten bis Druck bar",            en: "Wait for pressure",      args: ["pressure_mbar"] },
   27: { de: "Waage, Gewicht",                  en: "Scale weight target",    args: ["grams"] },
   28: { de: "Eco-Modus aktivieren",            en: "Activate ECO",           args: [] },
   29: { de: "Brühdruckbegrenzung",             en: "Brew pressure limit",    args: ["bar"] },
   30: { de: "Begrenzung Flussrate",            en: "Flow rate limit",        args: ["ml/s"] },
   31: { de: "Solltemperatur wiederherstellen", en: "Restore target temp",    args: [] },
+  32: { de: "Totvolumen Flowmeter Einzelsieb", en: "Flow meter dead space single", args: ["ml"] },
+  33: { de: "Totvolumen Flowmeter Doppelsieb", en: "Flow meter dead space double", args: ["ml"] },
+  34: { de: "Dampfboiler aus",                  en: "Steam boiler off",       args: [] },
 };
 
 // ---------------------------------------------------------------------------
@@ -100,9 +105,13 @@ export function categorizeScript(
 ): "brew" | "maintenance" | "unknown" {
   const lower = (title ?? "").toLowerCase();
   if (MAINTENANCE_KEYWORDS.some((kw) => lower.includes(kw))) return "maintenance";
-  const hasPumpAction = parsed.commands.some((c) => c.cmd === 3 || c.cmd === 4);
-  if (hasPumpAction) return "brew";
+  if (hasPumpAction(parsed)) return "brew";
   return "unknown";
+}
+
+/** Steuert das Skript die Pumpe an (Cmd 3 Leistung, Cmd 4 Druck)? Ohne kann es kein Bezug sein. */
+export function hasPumpAction(parsed: ParsedScript): boolean {
+  return parsed.commands.some((c) => c.cmd === 3 || c.cmd === 4);
 }
 
 // ---------------------------------------------------------------------------

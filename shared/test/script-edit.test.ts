@@ -130,9 +130,12 @@ test("⚠ keine Operation macht aus einem gueltigen Skript ein ungueltiges", () 
 
 // --- Hilfe und Felder ---------------------------------------------------------
 
-import { CMD_HELP, CMD_ARGS, INSERTABLE_CMDS } from "../src/script-help.js";
+import { CMD_HELP, CMD_ARGS, INSERTABLE_CMDS, SCRIPT_MODEL_HELP } from "../src/script-help.js";
 
-const KNOWN = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 20, 25, 27, 28, 29, 30, 31];
+const KNOWN = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 20, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34];
+/** Bekannt, aber nicht im Einfuegen-Menue: Start/Ende stehen fest; 32/33 stellen das
+ *  Totvolumen des Durchflusszaehlers ein, der seit FW 4.133 keine Werte liefert. */
+const NOT_OFFERED = [1, 7, 32, 33];
 
 test("jeder Befehl hat eine Hilfe mit Quelle", () => {
   for (const id of KNOWN) {
@@ -144,15 +147,25 @@ test("jeder Befehl hat eine Hilfe mit Quelle", () => {
   }
 });
 
+test("Hilfe bleibt kurz: eine Zeile, höchstens ein Zusatz (Flavio: „zu umfangreich“)", () => {
+  for (const id of KNOWN) {
+    const h = CMD_HELP[id];
+    assert.ok(h.summary.length <= 90, `Cmd ${id}: Zeile zu lang (${h.summary.length})`);
+    assert.ok(h.details.length <= 1, `Cmd ${id}: mehr als ein Zusatz`);
+    for (const d of h.details) assert.ok(d.length <= 60, `Cmd ${id}: Zusatz zu lang (${d.length})`);
+  }
+  assert.ok(SCRIPT_MODEL_HELP.length <= 3 && SCRIPT_MODEL_HELP.every((l) => l.length <= 90));
+});
+
 test("⚠ die Eingabefelder passen zu den Argumenten des Befehls", () => {
   for (const id of KNOWN) {
     assert.equal((CMD_ARGS[id] ?? []).length, makeCmd(id).argLabels.length, `Cmd ${id}`);
   }
 });
 
-test("Start und Ende sind nicht einfuegbar, alles andere schon", () => {
+test("Start, Ende und das Flowmeter-Totvolumen sind nicht einfuegbar, alles andere schon", () => {
   assert.ok(!INSERTABLE_CMDS.includes(1) && !INSERTABLE_CMDS.includes(7));
-  assert.deepEqual([...INSERTABLE_CMDS].sort((a, b) => a - b), KNOWN.filter((id) => id !== 1 && id !== 7));
+  assert.deepEqual([...INSERTABLE_CMDS].sort((a, b) => a - b), KNOWN.filter((id) => !NOT_OFFERED.includes(id)));
 });
 
 // --- Einfuegen mit Warten -----------------------------------------------------

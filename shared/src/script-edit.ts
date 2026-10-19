@@ -56,6 +56,7 @@ export function defaultArgs(cmd: number): number[] {
     case 12: return [5000];
     case 20: return [1, 1000];
     case 25: return [93];
+    case 26: return [4000];
     case 27: return [36];
     case 29: return [9];
     case 30: return [3];
@@ -161,7 +162,7 @@ export function setPhaseRamp(cmds: ParsedCmd[], at: number, rampMs: number, step
  * Die Wartezeit, deren Laenge das Ende der Stufe ab `at` bestimmt: die letzte
  * Cmd-12 zwischen diesem Pumpenbefehl und dem naechsten (bzw. dem Skriptende).
  * -1, wenn keine da ist — dann endet die Stufe sofort oder nur ueber eine
- * unbestimmte Wartezeit (Cmd 25/27), und es gibt nichts zu ziehen.
+ * unbestimmte Wartezeit (Cmd 25/26/27), und es gibt nichts zu ziehen.
  */
 export function phaseWaitIndex(cmds: ParsedCmd[], at: number): number {
   let found = -1;
@@ -191,7 +192,7 @@ export function shiftPhaseEnd(cmds: ParsedCmd[], at: number, deltaMs: number, st
 // ---------------------------------------------------------------------------
 
 /** Befehle, die die Uhr weiterdrehen (fest oder unbestimmt). */
-const WAIT_CMDS = new Set([12, 25, 27]);
+const WAIT_CMDS = new Set([12, 25, 26, 27]);
 
 /** Vorgabe-Wartezeit fuer einen neuen Pumpenbefehl: er soll sein Ziel erreichen. */
 export const MIN_STAGE_MS = 5000;

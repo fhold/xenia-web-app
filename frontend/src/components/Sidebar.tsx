@@ -69,9 +69,7 @@ export type ViewId =
   | "profiles"
   | "history"
   | "beans"
-  | "settings"
-  // Secondary view — reached from Settings, deliberately NOT in NAV_ITEMS (SE-2).
-  | "scripts";
+  | "settings";
 
 const NAV_ITEMS: { id: ViewId; label: string; Icon: LucideIcon }[] = [
   { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },

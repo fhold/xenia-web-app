@@ -59,6 +59,7 @@ export function StageStrip({ strip, firstDropS, xMin, xMax, padLeft, padRight }:
       case "arrived": return { icon: <Droplet {...ic} />, text: t("history.detailModal.stripArrived"), warn: false };
       case "waitWeight": return { icon: <Scale {...ic} />, text: `${n(e.value)} g`, warn: false };
       case "waitTemp": return { icon: <Thermometer {...ic} />, text: `${n(e.value)} °C`, warn: false };
+      case "waitPressure": return { icon: null, text: `≥ ${n(e.value)} bar`, warn: false };
       case "stop": {
         const warn = e.mode === "watchdog" || e.mode === "flowhold_watchdog" || e.mode === "app_failed";
         const text = e.weightG !== null && !warn ? `${n(e.weightG)} g` : stopModeLabel(t, e.mode);
@@ -90,6 +91,7 @@ export function StageStrip({ strip, firstDropS, xMin, xMax, padLeft, padRight }:
       case "arrived": return tip("exitArrived");
       case "waitWeight": return tip("exitWaitWeight", { v: n(e.value) });
       case "waitTemp": return tip("exitWaitTemp", { v: n(e.value) });
+      case "waitPressure": return tip("exitWaitPressure", { v: n(e.value) });
       case "stop": {
         const ex = exitParts(e);
         return e.weightG !== null && !ex.warn

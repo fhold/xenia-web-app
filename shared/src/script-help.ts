@@ -28,156 +28,146 @@ export interface CmdHelp {
 
 /** Wie ein Skript ueberhaupt laeuft — steht ueber allen Einzelhilfen. */
 export const SCRIPT_MODEL_HELP: string[] = [
-  "Die Maschine arbeitet die Befehle von oben nach unten ab, ohne auf sie zu warten: ein Pumpenbefehl setzt nur ein Ziel und die nächste Zeile kommt sofort dran.",
-  "Die Uhr des Ablaufs sind die Warte-Befehle. Nur „Warten“, „Warten bis °C“ und „Warten bis Gewicht“ halten die Abarbeitung an.",
-  "Die Übergangszeit eines Pumpenbefehls läuft deshalb parallel zur folgenden Wartezeit. Ist die Wartezeit kürzer, wird der Übergang abgeschnitten.",
-  "Folgt auf einen Pumpenbefehl gar kein Warten, überschreibt ihn der nächste sofort — er läuft nie. Beim Einfügen bringt der Editor deshalb ein Warten mit, wenn keins folgt (mindestens 5 s, bei „Pumpe aus“ 10 s).",
+  "Befehle laufen von oben nach unten.",
+  "Nur Warte-Befehle halten an. Ein Pumpenbefehl gilt, bis der nächste kommt.",
+  "Ohne Warten danach läuft ein Pumpenbefehl nie, deshalb fügt der Editor eins mit ein.",
 ];
 
+/*
+ * Hilfetexte: eine kurze Zeile, was der Befehl tut, und hoechstens ein Zusatz,
+ * wenn er einen Fehler verhindert (Flavio, 2026-10-16: „zu umfangreich, nicht
+ * leicht verstaendlich“). Hintergrund — Messungen, Firmware, Auskunft von
+ * Xenia, welche Skripte was nutzen — steht in der Spec, nicht hier.
+ */
 export const CMD_HELP: Record<number, CmdHelp> = {
   1: {
     title: "Start", group: "Sonstiges", fixed: true, source: "xenia",
-    summary: "Markiert den Anfang des Skripts.",
-    details: ["Muss der erste Befehl sein; der Editor hält ihn fest."],
+    summary: "Anfang des Skripts, bleibt immer oben.",
+    details: [],
   },
   7: {
     title: "Ende", group: "Sonstiges", fixed: true, source: "xenia",
-    summary: "Markiert das Ende des Skripts.",
-    details: [
-      "Muss der letzte Befehl sein; der Editor hält ihn fest.",
-      "Die Maschine schließt am Ende auch ohne „Entleeren & Beenden“ das Bezugsventil, öffnet das Ablassventil und schaltet die Pumpe aus (Xenia).",
-    ],
+    summary: "Ende des Skripts, bleibt immer unten.",
+    details: ["Danach stoppt die Maschine Pumpe und Ventile selbst."],
   },
   2: {
     title: "Pumpe an", group: "Pumpe", source: "nicht erprobt",
-    summary: "Schaltet die Pumpe ohne eigenen Sollwert ein.",
-    details: [
-      "In keinem Skript hier verwendet — die Pumpenbefehle Leistung, Druck und Fluss schalten die Pumpe selbst ein.",
-    ],
+    summary: "Schaltet die Pumpe ohne Sollwert ein.",
+    details: ["Nicht nötig: Druck und Leistung schalten sie selbst ein."],
   },
   3: {
     title: "Pumpenleistung", group: "Pumpe", source: "gemessen",
-    summary: "Fährt die Pumpe auf eine feste Leistung in Prozent, ohne auf den Druck zu schauen.",
-    details: [
-      "Übergangszeit: in dieser Zeit geht die Leistung vom aktuellen Wert gleitend auf das Ziel.",
-      "Aus dem Stand fördert die Pumpe erst ab etwa 50 % (gemessen). Ob kleinere Werte aus laufendem Betrieb noch fördern, wie bei „Declining“ mit 20 %, ist nicht gemessen.",
-      "Der Druck ergibt sich aus Leistung und Puck-Widerstand. In der Kurve steht Leistung deshalb nur als angenommenes bar-Äquivalent (75 % ≈ 9 bar, 100 % ≈ 10 bar).",
-    ],
+    summary: "Pumpe läuft mit fester Leistung, den Druck macht der Puck. Übergang = Zeit bis zum Ziel.",
+    details: ["Unter ~50 % fördert sie aus dem Stand nicht."],
   },
   4: {
     title: "Pumpendruck", group: "Pumpe", source: "gemessen",
-    summary: "Regelt die Pumpe auf einen Zieldruck in bar.",
-    details: [
-      "Übergangszeit: in dieser Zeit wird das Ziel vom aktuellen Druck aus gleitend angehoben oder abgesenkt.",
-      "Der Befehl kehrt sofort zurück — wie lange der Druck gilt, bestimmt das folgende „Warten“.",
-      "Druck braucht Widerstand: solange der Puck noch nicht gesättigt ist, bleibt der echte Druck hinter der Soll-Kurve zurück. Eine Rampe auf 9 bar in 1 s ist auf dem Papier möglich, am Puck nicht.",
-      "Obergrenze im Editor 12 bar; die Maschine begrenzt real um 10 bar.",
-    ],
+    summary: "Regelt auf den Druck. Übergang = Zeit bis zum Ziel.",
+    details: ["Wie lange er gilt, bestimmt das Warten danach."],
   },
   5: {
     title: "Flussrate (Waage)", group: "Pumpe", source: "nicht erprobt",
-    summary: "Regelt die Pumpe auf eine Flussrate in ml/s, gemessen an der Waage.",
-    details: [
-      "Hier nie in einem Skript gelaufen — Flussregelung macht die App selbst (Flow-Profile).",
-      "Braucht eine angeschlossene Waage; die Maschine hat keinen eigenen Flussmesser mehr (FW 4.133).",
-    ],
+    summary: "Regelt auf eine Flussrate, gemessen an der Waage.",
+    details: ["Nur mit Waage."],
   },
   6: {
     title: "Pumpe aus", group: "Pumpe", source: "gemessen",
-    summary: "Schaltet die Pumpe ab; das Bezugsventil bleibt offen.",
-    details: [
-      "Der Druck baut sich dann über den Puck ab — so entsteht eine Bloom-Pause (z. B. „Blooming Espresso“, „6bar Bloom KN“).",
-      "Die Pause dauert so lange wie das folgende „Warten“.",
-    ],
+    summary: "Pumpe aus, Ventil bleibt offen: der Druck baut sich ab (Pause, Bloom).",
+    details: [],
   },
   8: {
     title: "Heizleistung Brühkessel", group: "Temperatur", source: "nicht erprobt",
-    summary: "Begrenzt die Heizleistung des Brühkessels in Prozent.",
-    details: [
-      "„80s“ setzt Brühkessel und Brühgruppe auf 0 % — dort heizt während des Bezugs nichts nach. Die Wirkung ist nicht gemessen.",
-    ],
+    summary: "Begrenzt das Nachheizen des Brühkessels.",
+    details: [],
   },
   9: {
     title: "Heizleistung Brühgruppe", group: "Temperatur", source: "nicht erprobt",
-    summary: "Begrenzt die Heizleistung der Brühgruppe in Prozent.",
-    details: ["Siehe „Heizleistung Brühkessel“ — dieselbe Idee für die Gruppe."],
+    summary: "Begrenzt das Nachheizen der Brühgruppe.",
+    details: [],
   },
   12: {
     title: "Warten", group: "Zeit", source: "xenia",
-    summary: "Hält die Abarbeitung für eine feste Zeit an — das ist die Uhr des Skripts.",
-    details: [
-      "Alles, was vorher gestartet wurde (Druckrampe, Leistung), läuft währenddessen weiter.",
-      "Eine lange Wartezeit direkt vor dem Ende ist bei Stopp nach Gewicht die Notbremse: die App stoppt vorher, sonst endet das Skript hier (mindestens 20 s, sonst meldet die Prüfung einen fehlenden Stopp).",
-    ],
+    summary: "Wartet die Zeit ab, erst dann kommt der nächste Befehl.",
+    details: ["Das letzte Warten ist die Notbremse: mindestens 20 s."],
   },
   13: {
     title: "Bezugsventil auf", group: "Ventile", source: "xenia",
-    summary: "Öffnet das Ventil zur Brühgruppe — ohne das kommt kein Wasser zum Puck.",
-    details: ["Steht deshalb fast immer als erster Befehl nach dem Start."],
+    summary: "Öffnet den Weg zur Brühgruppe. Steht am Anfang jedes Bezugs.",
+    details: [],
   },
   14: {
     title: "Bezugsventil zu", group: "Ventile", source: "xenia",
-    summary: "Schließt das Ventil zur Brühgruppe.",
-    details: ["Am Skriptende erledigt das die Maschine selbst."],
+    summary: "Schließt den Weg zur Brühgruppe.",
+    details: ["Am Ende macht das die Maschine selbst."],
   },
   15: {
     title: "Ablassventil auf", group: "Ventile", source: "xenia",
-    summary: "Öffnet das Ablassventil: der Druck über dem Puck entweicht in die Abtropfschale.",
-    details: ["Wird beim Rückspülen („Cleaning“) nach jedem Druckstoß benutzt."],
+    summary: "Lässt den Druck über dem Puck in die Abtropfschale ab.",
+    details: [],
   },
   16: {
     title: "Ablassventil zu", group: "Ventile", source: "xenia",
     summary: "Schließt das Ablassventil wieder.",
-    details: ["Vor dem nächsten Druckaufbau nötig, sonst läuft das Wasser in die Schale statt durch den Puck."],
+    details: ["Vor dem nächsten Druckaufbau nötig."],
   },
   17: {
     title: "Entleeren & Beenden", group: "Ventile", source: "xenia",
-    summary: "Pumpe aus, Bezugsventil zu, Ablassventil auf — der Bezug ist vorbei.",
-    details: [
-      "Die Maschine führt diese Folge am Ende ohnehin aus (Xenia); der Befehl beendet den Bezug nur an genau dieser Stelle.",
-      "Skripte mit Stopp nach Gewicht lassen ihn weg und enden mit einer langen Wartezeit als Notbremse.",
-    ],
+    summary: "Beendet den Bezug an dieser Stelle: Pumpe aus, Druck ab.",
+    details: [],
   },
   20: {
     title: "Signalton", group: "Sonstiges", source: "xenia",
     summary: "Piept: Anzahl und Dauer je Ton.",
-    details: ["„Cleaning“ piept zweimal, wenn das Rückspülen fertig ist."],
+    details: [],
   },
   25: {
     title: "Warten bis °C", group: "Temperatur", source: "nicht erprobt",
-    summary: "Setzt eine Solltemperatur und wartet, bis sie erreicht ist.",
-    details: [
-      "Wie lange das dauert, weiß niemand vorher — die Kurve zeigt dafür ein Band fester Breite, nicht maßstäblich.",
-      "„Solltemperatur wiederherstellen“ stellt die alte Temperatur zurück.",
-    ],
+    summary: "Setzt eine Temperatur und wartet, bis sie erreicht ist.",
+    details: ["„Solltemperatur zurück“ stellt die alte wieder her."],
+  },
+  26: {
+    title: "Warten bis Druck", group: "Pumpe", source: "xenia",
+    summary: "Wartet, bis der Druck erreicht ist. Die Pumpe läuft weiter.",
+    details: [],
   },
   27: {
     title: "Warten bis Gewicht", group: "Waage", source: "gemessen",
-    summary: "Wartet, bis die Waage das Gewicht in Gramm zeigt; die Pumpe läuft solange weiter.",
-    details: [
-      "Funktioniert nur mit angeschlossener Bookoo-Waage.",
-      "Die Waage tariert kurz nach dem Start — ein „Warten“ von etwa 1 s davor verhindert, dass der Rest vom letzten Bezug zählt (Xenia-Support).",
-      "Die App stoppt nach Gewicht auch selbst und lernt dabei den Nachlauf — beides zusammen ist nicht nötig.",
-    ],
+    summary: "Wartet, bis das Gewicht in der Tasse ist. Nur mit Waage.",
+    details: ["Davor ~1 s warten, damit die Waage tariert."],
   },
   28: {
     title: "Eco an", group: "Sonstiges", source: "nicht erprobt",
-    summary: "Schaltet die Maschine in den Eco-Modus.",
-    details: ["In keinem Skript hier verwendet."],
+    summary: "Schaltet in den Eco-Modus.",
+    details: [],
   },
   29: {
     title: "Druckbegrenzung", group: "Pumpe", source: "nicht erprobt",
-    summary: "Obergrenze für den Brühdruck in bar.",
-    details: ["Gedacht für Leistungs- oder Flussbefehle, die selbst nicht auf Druck regeln. Hier nie gelaufen."],
+    summary: "Obergrenze für den Druck bei Leistung oder Fluss.",
+    details: [],
   },
   30: {
     title: "Flussbegrenzung", group: "Pumpe", source: "nicht erprobt",
-    summary: "Obergrenze für die Flussrate in ml/s.",
-    details: ["Gedacht für Druck- oder Leistungsbefehle. Hier nie gelaufen; braucht die Waage als Flussquelle."],
+    summary: "Obergrenze für den Fluss bei Druck oder Leistung.",
+    details: ["Nur mit Waage."],
   },
   31: {
     title: "Solltemperatur zurück", group: "Temperatur", source: "nicht erprobt",
-    summary: "Stellt die Solltemperatur zurück, die vor „Warten bis °C“ galt.",
+    summary: "Stellt die Temperatur von vor „Warten bis °C“ wieder her.",
+    details: [],
+  },
+  32: {
+    title: "Totvolumen Flowmeter 1×", group: "Sonstiges", source: "xenia",
+    summary: "Totvolumen des Durchflusszählers, Einzelsieb.",
+    details: ["Ohne Wirkung: der Zähler liefert keine Werte mehr."],
+  },
+  33: {
+    title: "Totvolumen Flowmeter 2×", group: "Sonstiges", source: "xenia",
+    summary: "Totvolumen des Durchflusszählers, Doppelsieb.",
+    details: ["Ohne Wirkung: der Zähler liefert keine Werte mehr."],
+  },
+  34: {
+    title: "Dampfboiler aus", group: "Sonstiges", source: "xenia",
+    summary: "Schaltet den Dampfboiler aus.",
     details: [],
   },
 };
@@ -214,10 +204,13 @@ export const CMD_ARGS: Record<number, ArgField[]> = {
     { label: "Dauer", unit: "s", scale: 1000, step: 0.1, min: 0.1 },
   ],
   25: [{ label: "Temperatur", unit: "°C", scale: 1, step: 0.5, min: 60, max: 100 }],
+  26: [{ label: "Druck", unit: "bar", scale: 1000, step: 0.1, min: 0, max: 10 }],
   27: [{ label: "Gewicht", unit: "g", scale: 1, step: 0.5, min: 1, max: 500 }],
   29: [{ label: "Druck", unit: "bar", scale: 1, step: 0.1, min: 0, max: 12 }],
   30: [{ label: "Fluss", unit: "ml/s", scale: 1, step: 0.1, min: 0, max: 10 }],
+  32: [{ label: "Totvolumen", unit: "ml", scale: 1, step: 0.1, min: 0 }],
+  33: [{ label: "Totvolumen", unit: "ml", scale: 1, step: 0.1, min: 0 }],
 };
 
 /** Befehle, die man einfuegen kann, in Menue-Reihenfolge. */
-export const INSERTABLE_CMDS: number[] = [4, 3, 6, 12, 13, 14, 15, 16, 17, 27, 25, 31, 8, 9, 20, 29, 30, 5, 2, 28];
+export const INSERTABLE_CMDS: number[] = [4, 3, 6, 12, 13, 14, 15, 16, 17, 27, 26, 25, 31, 8, 9, 20, 29, 30, 5, 2, 28, 34];

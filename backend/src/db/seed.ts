@@ -43,6 +43,7 @@ const DEFAULTS: Record<string, string> = {
   show_stage_markers: "false",   // opt-in Flow-Hold stage markers + Soll staircase in shot detail (default off)
   // Shot recording optional fields (Step 8)
   show_tds_input: "false",       // show TDS + EY% fields in post-shot review
+  rating_compare_prev: "false",  // Bewertung fragt: besser/gleich/schlechter als der letzte Bezug derselben Sorte
   // Bean editor section visibility (Step 8.5) — which optional sections
   // of the BeanEditor are shown. Hidden sections never overwrite stored data.
   bean_fields_origin: "true",
@@ -61,7 +62,7 @@ const DEFAULTS: Record<string, string> = {
   // seedSettings (Null-Fall), not here, since it needs a dynamic timestamp.
   backflush_reminder_enabled: "true",
   backflush_reminder_days: "14",
-  backflush_script_ids: "",
+  backflush_profile_ids: "",
   backflush_snooze_until: "",
 };
 

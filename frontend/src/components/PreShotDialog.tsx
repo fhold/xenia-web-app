@@ -1,8 +1,9 @@
 /**
  * PreShotDialog — Phase 1 Step 9.
  *
- * Opens after the ShotSizePicker (1×/2×) and before the brew actually starts.
- * The user picks bean, grinder, grind setting, RPM and dose; "Bezug starten"
+ * Opens from every start path (dashboard chip, profile list, repeat) before the
+ * brew actually starts. The user picks the variant and the sieve (basket), bean,
+ * grinder, grind setting, RPM and dose; "Bezug starten"
  * sends everything to POST /api/scripts/execute via the onStart callback.
  *
  * Field visibility is configured in Settings (usePreShotFieldSettings).
@@ -16,7 +17,11 @@ import { usePreShotData } from "../hooks/usePreShotData.js";
 import { usePreShotFieldSettings } from "../hooks/usePreShotFieldSettings.js";
 import { BeanPicker, isPickableBean } from "./BeanPicker.js";
 import { resolveColor } from "./Gauge.js";
-import type { Profile, ShotSize } from "@shared/types.js";
+import type { GrindSource, Profile, ProfileVariant, ShotSize } from "@shared/types.js";
+import { startVariants, shotSizeForBasket } from "@shared/profile-slots.js";
+import { useBaskets } from "../hooks/useBaskets.js";
+import { useBreakpoint } from "../hooks/useBreakpoint.js";
+import { formatDay } from "../lib/dates.js";
 import theme, { alpha } from "../theme.js";
 
 const C = theme;
@@ -41,18 +46,32 @@ export interface PreShotPayload {
  *  a non-default target. */
 export type PreShotInitialValues = PreShotPayload;
 
+/** Was gestartet wird: die Variante, das Sieb und die Groesse, die daraus folgt. */
+export interface StartChoice {
+  variant: ProfileVariant;
+  basketId: number | null;
+  shotSize: ShotSize;
+}
+
 interface PreShotDialogProps {
   profile: Profile;
-  shotSize: ShotSize;
-  /** Whether the script for this shot size stops via Cmd 27 (machine-native). */
-  hasCmd27?: boolean;
+  /** Vorgewaehlte Variante; null = die erste. Im Dialog umschaltbar. */
+  variantId: number | null;
+  /** Vorgewaehltes Sieb (Wiederholen); fehlt es, gilt das Vorgabe-Sieb der Variante. */
+  basketId?: number | null;
+  /** Start aus der Sorten-Ansicht: diese Roestung statt der zuletzt mit dem Profil benutzten. */
+  beanId?: number | null;
+  /** Start vom Dashboard-Chip: Variante und Sieb wie beim letzten Bezug mit diesem Profil. */
+  suggest?: boolean;
+  /** Stoppt das Skript dieser Variante selbst (Cmd 27)? */
+  hasCmd27For?: (variant: ProfileVariant) => boolean;
   /**
    * When set (repeat flow), the dialog opens prefilled with these exact
    * values instead of the active bean/grinder + the prefill cascade.
    */
   initialValues?: PreShotInitialValues;
   /** Performs the execute. Resolves to an error message, or null on success. */
-  onStart: (payload: PreShotPayload) => Promise<string | null>;
+  onStart: (payload: PreShotPayload, choice: StartChoice) => Promise<string | null>;
   onClose: () => void;
   /** PT-2: live brew-group temperature (°C) for the readiness ampel. null = unknown. */
   liveBgTempC?: number | null;
@@ -101,10 +120,20 @@ const labelStyle: React.CSSProperties = {
   marginBottom: 4,
 };
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** `aside` steht rechts in der Beschriftungszeile — kostet keine Hoehe. */
+function Field({ label, aside, children }: { label: string; aside?: string | null; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 8 }}>
-      <label style={labelStyle}>{label}</label>
+      {aside ? (
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <label style={labelStyle}>{label}</label>
+          <span style={{ marginLeft: "auto", minWidth: 0, fontSize: 10.5, lineHeight: 1, color: C.mut, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {aside}
+          </span>
+        </div>
+      ) : (
+        <label style={labelStyle}>{label}</label>
+      )}
       {children}
     </div>
   );
@@ -153,8 +182,11 @@ function GrindStepper({ value, onChange, inputStyle }: {
 
 export function PreShotDialog({
   profile,
-  shotSize,
-  hasCmd27 = false,
+  variantId: initialVariantId,
+  basketId: initialBasketId,
+  beanId: initialBeanId = null,
+  suggest = false,
+  hasCmd27For,
   initialValues,
   onStart,
   onClose,
@@ -163,9 +195,40 @@ export function PreShotDialog({
   currentBbSetpointC,
   onSetFromProfile,
 }: PreShotDialogProps) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
+  // Handy: die Profilzeile bricht um, das Sieb bekommt eine eigene Zeile.
+  const mobile = useBreakpoint() === "mobile";
   const { beans, grinders, activeBeanId, activeGrinderId, loading } = usePreShotData();
-  const { settings: fields } = usePreShotFieldSettings();
+  const { settings: fieldSettings } = usePreShotFieldSettings();
+  // Messlauf: ohne Bohne, Muehle, Mahlgrad und Dosis — er zaehlt nirgends.
+  const measurement = profile.kind === "test";
+  const fields = measurement
+    ? { ...fieldSettings, grinder: false, grindSetting: false, grinderRpm: false, dose: false }
+    : fieldSettings;
+  // Variante und Sieb (Schnitt 3d). Das Sieb folgt der Variante (Vorgabe-Sieb),
+  // bis es im Dialog oder vom Wiederholen ausdruecklich gewaehlt ist.
+  const variants = startVariants(profile);
+  const [variantId, setVariantId] = useState<number | null>(initialVariantId ?? variants[0]?.id ?? null);
+  const variant = variants.find((v) => v.id === variantId) ?? variants[0] ?? null;
+  const { baskets } = useBaskets();
+  const [basketChoice, setBasketChoice] = useState<number | null | undefined>(initialBasketId ?? undefined);
+  const basketId = basketChoice !== undefined ? basketChoice : (variant?.defaultBasketId ?? null);
+  const basket = baskets.find((b) => b.id === basketId) ?? null;
+  const defaultBasket = baskets.find((b) => b.id === variant?.defaultBasketId) ?? null;
+  // Anderes Sieb als das der Variante — weiche Sperre wie bei der Dosis. Verglichen
+  // wird das Sieb selbst, nicht ein Typ: zwei 1er-Siebe sind zwei Siebe.
+  const basketMismatch = basket !== null && defaultBasket !== null && basket.id !== defaultBasket.id;
+  const [basketWarn, setBasketWarn] = useState(false);
+  const showBasket = baskets.length > 0 && variant?.defaultBasketId != null;
+  // Das Sieb waehlt die Variante (Flavio: das Dropdown reicht). Die Varianten-
+  // Knoepfe bleiben nur, wo das nicht eindeutig geht: eine Variante ohne eigenes
+  // Sieb oder zwei Varianten auf demselben Sieb.
+  const variantByBasket = variants.length > 1
+    && variants.every((v) => v.defaultBasketId != null)
+    && new Set(variants.map((v) => v.defaultBasketId)).size === variants.length;
+  const showVariantButtons = variants.length > 1 && !variantByBasket;
+  const lineControls = variants.length > 1 || showBasket;
+  const hasCmd27 = variant ? (hasCmd27For?.(variant) ?? false) : false;
 
   // --- Selection state ---
   const [beanId, setBeanId]       = useState<number | null>(null);
@@ -188,6 +251,8 @@ export function PreShotDialog({
   }, [beanId]);
   const [grinderId, setGrinderId] = useState<number | null>(null);
   const [grindSetting, setGrindSetting] = useState("");
+  /** Woher der vorbelegte Mahlgrad kommt; null, sobald er von Hand geaendert ist. */
+  const [grindSource, setGrindSource]   = useState<GrindSource | null>(null);
   const [grinderRpm, setGrinderRpm]     = useState("");
   const [doseG, setDoseG]               = useState("");
 
@@ -211,8 +276,8 @@ export function PreShotDialog({
   // view so the user doesn't have to scroll again for "Trotzdem starten".
   const actionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (scaleWarn) actionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [scaleWarn]);
+    if (scaleWarn || basketWarn) actionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [scaleWarn, basketWarn]);
 
   // --- Yield override (per-shot only; null = use profile default) ---
   const [yieldOverrideG, setYieldOverrideG] = useState<number | null>(null);
@@ -221,17 +286,22 @@ export function PreShotDialog({
 
   // Fetch the grind/RPM/dose prefill cascade for a bean+grinder pair and
   // write the result into the number fields. Called on the initial (non-repeat)
-  // load and whenever the user changes the bean or grinder.
+  // load and whenever the user changes the bean, grinder or basket. With the
+  // profile and basket the cascade starts at "this profile + this basket"
+  // (Schnitt 3e); without a bean the profile would pick one, so it is only sent
+  // with a bean — or on the initial load, where that pick is wanted.
   const fetchDefaults = useCallback(
     async (
       bId: number | null,
       gId: number | null,
       profileId?: number,
-    ): Promise<{ suggestedBeanId: number | null; suggestedGrinderId: number | null }> => {
+      bkId?: number | null,
+    ): Promise<{ suggestedBeanId: number | null; suggestedGrinderId: number | null; suggestedVariantId: number | null; suggestedBasketId: number | null }> => {
       const params = new URLSearchParams();
       if (bId !== null) params.set("beanId", String(bId));
       if (gId !== null) params.set("grinderId", String(gId));
       if (profileId !== undefined) params.set("profileId", String(profileId));
+      if (bkId !== undefined && bkId !== null) params.set("basketId", String(bkId));
       try {
         const r = await fetch(`/api/shots/preshot-defaults?${params.toString()}`);
         const d = (await r.json()) as {
@@ -240,17 +310,23 @@ export function PreShotDialog({
           doseG: number | null;
           suggestedBeanId?: number | null;
           suggestedGrinderId?: number | null;
+          suggestedVariantId?: number | null;
+          suggestedBasketId?: number | null;
+          grindSource?: GrindSource | null;
         };
         setGrindSetting(d.grindSetting !== null ? String(d.grindSetting) : "");
+        setGrindSource(d.grindSource ?? null);
         setGrinderRpm(d.grinderRpm !== null ? String(d.grinderRpm) : "");
         setDoseG(d.doseG !== null ? String(d.doseG) : "");
         return {
           suggestedBeanId: d.suggestedBeanId ?? null,
           suggestedGrinderId: d.suggestedGrinderId ?? null,
+          suggestedVariantId: d.suggestedVariantId ?? null,
+          suggestedBasketId: d.suggestedBasketId ?? null,
         };
       } catch {
         // Leave fields as-is — prefill is a convenience, not a requirement
-        return { suggestedBeanId: null, suggestedGrinderId: null };
+        return { suggestedBeanId: null, suggestedGrinderId: null, suggestedVariantId: null, suggestedBasketId: null };
       }
     },
     [],
@@ -258,11 +334,15 @@ export function PreShotDialog({
 
   // Initial prefill, once the dialog's data has loaded.
   const initRef = useRef(false);
+  /** Ab hier holt ein Siebwechsel Mahlgrad und Dosis neu; `cascadeBasket` = das Sieb dazu. */
+  const cascadeReady = useRef(false);
+  const cascadeBasket = useRef<number | null>(basketId);
   useEffect(() => {
     if (loading || initRef.current) return;
     initRef.current = true;
 
     if (initialValues) {
+      cascadeReady.current = true;
       // Repeat flow — use the source shot's exact values, no cascade.
       setBeanId(initialValues.beanId);
       setBeanLabel(initialValues.beanLabel ?? "");
@@ -286,7 +366,15 @@ export function PreShotDialog({
       id !== null && grinders.some((g) => g.id === id);
 
     void (async () => {
-      const sug = await fetchDefaults(null, null, profile.id);
+      // Vom Chip kennt erst die Antwort das Sieb — dann nimmt der Server das des letzten Bezugs.
+      const sug = await fetchDefaults(initialBeanId, null, profile.id, suggest ? undefined : basketId);
+      let basketNow = basketId;
+      // Vom Chip: Variante und Sieb wie beim letzten Bezug mit diesem Profil.
+      if (suggest && sug.suggestedVariantId !== null && variants.some((v) => v.id === sug.suggestedVariantId)) {
+        setVariantId(sug.suggestedVariantId);
+        if (sug.suggestedBasketId !== null) setBasketChoice(sug.suggestedBasketId);
+        basketNow = sug.suggestedBasketId ?? variants.find((v) => v.id === sug.suggestedVariantId)?.defaultBasketId ?? null;
+      }
 
       const finalBean = beanPickable(sug.suggestedBeanId)
         ? sug.suggestedBeanId
@@ -305,10 +393,30 @@ export function PreShotDialog({
       // If we fell back off either suggestion, re-run the cascade so grind/dose
       // match the (bean, grinder) pair we actually show.
       if (finalBean !== sug.suggestedBeanId || finalGrinder !== sug.suggestedGrinderId) {
-        void fetchDefaults(finalBean, finalGrinder);
+        void fetchDefaults(finalBean, finalGrinder, finalBean !== null ? profile.id : undefined, basketNow);
       }
+      cascadeBasket.current = basketNow;
+      cascadeReady.current = true;
     })();
   }, [loading, activeBeanId, activeGrinderId, beans, grinders, initialValues, fetchDefaults, profile.id]);
+
+  // Anderes Sieb (gewaehlt oder mit der Variante): Mahlgrad und Dosis neu fuer dieses Sieb.
+  useEffect(() => {
+    if (!cascadeReady.current || cascadeBasket.current === basketId) return;
+    cascadeBasket.current = basketId;
+    void fetchDefaults(beanId, grinderId, beanId !== null ? profile.id : undefined, basketId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basketId]);
+
+  // „wie zuletzt mit Profil + Sieb (12.10.) · passt“ — Stufe, Datum und Mahlgrad-Hinweis des Quellbezugs.
+  const grindAside = (() => {
+    if (!grindSource) return null;
+    const date = formatDay(grindSource.startedAt, { style: "numeric", locale: lang === "de" ? "de-DE" : "en-US" });
+    const note = grindSource.grindNote === "finer" ? t("shotRating.grindFiner")
+      : grindSource.grindNote === "coarser" ? t("shotRating.grindCoarser")
+      : grindSource.grindNote === "ok" ? t("shotRating.grindOk") : null;
+    return `${t(`preshot.grindFrom.${grindSource.stage}`, { date })}${note ? ` · ${note.toLowerCase()}` : ""}`;
+  })();
 
   const doseMissing = doseWarn && doseG.trim() === "";
   const selectedGrinder = grinders.find((g) => g.id === grinderId) ?? null;
@@ -325,8 +433,30 @@ export function PreShotDialog({
     ((selectedGrinder.rpmMin !== null && rpmNum < selectedGrinder.rpmMin) ||
       (selectedGrinder.rpmMax !== null && rpmNum > selectedGrinder.rpmMax));
 
-  const yieldG =
-    shotSize === "single" ? profile.yieldTargetSingleG : profile.yieldTargetDoubleG;
+  const yieldG = variant?.yieldG ?? null;
+
+  // Variante im Dialog umschalten: Sieb zurueck auf ihre Vorgabe, eine
+  // Yield-Aenderung galt der alten Variante.
+  function pickVariant(next: number): void {
+    if (next === variantId) return;
+    setVariantId(next);
+    setBasketChoice(undefined);
+    setBasketWarn(false);
+    setYieldOverrideG(null);
+  }
+
+  // Sieb waehlen: die Variante, deren Vorgabe-Sieb es ist, kommt mit (die erste
+  // in der Reihenfolge). Hat keine Variante dieses Sieb, bleibt die Variante —
+  // das Sieb wird trotzdem aufgezeichnet, der Hinweis beim Start sagt es.
+  function pickBasket(next: number | null): void {
+    const match = next === null ? undefined : variants.find((v) => v.defaultBasketId === next);
+    if (match && match.id !== variantId) {
+      setVariantId(match.id);
+      setYieldOverrideG(null);
+    }
+    setBasketChoice(next);
+    setBasketWarn(false);
+  }
 
   // Effective yield = override if set, else profile default. The override is
   // "active" (and gets the changed-indicator) only when it differs from default.
@@ -366,11 +496,18 @@ export function PreShotDialog({
       if (beanId !== null) {
         const q = new URLSearchParams({ beanId: String(beanId) });
         if (grinderId !== null) q.set("grinderId", String(grinderId));
+        if (basketId !== null) q.set("basketId", String(basketId));
         fetch(`/api/shots/preshot-defaults?${q.toString()}`)
           .then((r) => (r.ok ? (r.json() as Promise<{ doseG: number | null }>) : null))
           .then((d) => setLastDoseG(d?.doseG ?? null))
           .catch(() => { /* Vorschlag ist Komfort */ });
       }
+      return;
+    }
+
+    if (basketMismatch && !basketWarn) {
+      setBasketWarn(true);
+      setStarting(false);
       return;
     }
 
@@ -395,10 +532,10 @@ export function PreShotDialog({
 
     // Hidden fields contribute null — a fresh shot record, nothing to preserve.
     const payload: PreShotPayload = {
-      beanId,
+      beanId: measurement ? null : beanId,
       // Nur mitschicken, wenn keine gepflegte Bohne gewaehlt ist — sonst
       // stuenden zwei Bohnen am selben Bezug.
-      beanLabel: beanId === null && beanLabel.trim() !== "" ? beanLabel.trim() : null,
+      beanLabel: !measurement && beanId === null && beanLabel.trim() !== "" ? beanLabel.trim() : null,
       grinderId: fields.grinder ? grinderId : null,
       grindSetting:
         fields.grindSetting && grindSetting.trim() !== ""
@@ -410,7 +547,12 @@ export function PreShotDialog({
       yieldTargetOverrideG: yieldOverrideG,
     };
 
-    const err = await onStart(payload);
+    if (!variant) {
+      setError(t("preshot.noVariant"));
+      setStarting(false);
+      return;
+    }
+    const err = await onStart(payload, { variant, basketId, shotSize: shotSizeForBasket(basket?.type ?? null) });
     if (err) {
       setError(err);
       setStarting(false);
@@ -441,7 +583,9 @@ export function PreShotDialog({
           background: C.cardElev,
           border: `1px solid ${C.bdrL}`,
           borderRadius: 14,
-          padding: "16px 24px 18px",
+          // 14 px oben und unten: so passt der Dialog bei 1072×590 ohne
+          // Scrollen (vorher 4 px zu hoch, gemessen 533 bei 529 Platz).
+          padding: "14px 24px 14px",
           // The profile note gets its own column beside the fields — that needs
           // room the 440px single-column dialog does not have.
           width: showProfileNotes ? "min(760px, 96vw)" : "min(440px, 96vw)",
@@ -482,25 +626,58 @@ export function PreShotDialog({
             display: "flex",
             alignItems: "baseline",
             gap: 8,
+            ...(mobile ? { flexWrap: "wrap" as const, rowGap: 6 } : {}),
             background: C.accG,
             border: `1px solid ${C.accB}`,
             borderRadius: 8,
-            padding: "7px 12px",
+            // Mit Varianten-Umschalter oder Sieb 1 px weniger Polster: die Zeile
+            // bleibt so hoch wie vorher, der Dialog wird nicht laenger.
+            padding: lineControls ? "6px 12px" : "7px 12px",
             marginBottom: 10,
           }}
         >
           <span style={{ fontSize: 13, fontWeight: 600, color: C.txt }}>
             {profile.name}
           </span>
-          <span
-            style={{
-              fontSize: 13,
-              color: C.acc,
-              fontFamily: "'JetBrains Mono', monospace",
-            }}
-          >
-            {shotSize === "single" ? "1×" : "2×"}
-          </span>
+          {showVariantButtons ? (
+            <span role="radiogroup" aria-label={t("preshot.variant")} style={{ display: "inline-flex", border: `1px solid ${C.accB}`, borderRadius: 7, overflow: "hidden", flexShrink: mobile ? 0 : 1, minWidth: 0 }}>
+              {variants.map((v) => (
+                <button
+                  key={v.id}
+                  role="radio"
+                  aria-checked={variant?.id === v.id}
+                  onClick={() => pickVariant(v.id)}
+                  style={{
+                    height: 17, padding: "0 9px", border: "none", cursor: "pointer", fontFamily: "inherit",
+                    fontSize: 12, lineHeight: "17px", fontWeight: 600, whiteSpace: "nowrap",
+                    background: variant?.id === v.id ? C.accG2 : "transparent",
+                    color: variant?.id === v.id ? C.acc : C.mut,
+                  }}
+                >
+                  {v.name}
+                </button>
+              ))}
+            </span>
+          ) : variantByBasket ? null : (
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.acc }}>{variant?.name ?? ""}</span>
+          )}
+          {mobile && showBasket && <span aria-hidden="true" style={{ order: 1, flexBasis: "100%", height: 0 }} />}
+          {showBasket && (
+            <select
+              aria-label={t("preshot.basket")}
+              title={basket?.description ?? undefined}
+              value={basketId ?? ""}
+              onChange={(e) => { pickBasket(e.target.value === "" ? null : Number(e.target.value)); }}
+              style={{
+                height: 19, boxSizing: "border-box", padding: "0 4px", maxWidth: mobile ? "100%" : 150, borderRadius: 7, fontSize: 12,
+                order: mobile ? 2 : undefined,
+                fontFamily: "inherit", background: "transparent", cursor: "pointer",
+                border: `1px solid ${basketMismatch ? C.warnSoft : C.accB}`, color: basketMismatch ? C.warnSoft : C.mut,
+              }}
+            >
+              {baskets.map((b) => <option key={b.id} value={b.id} title={b.description ?? undefined}>{b.name}</option>)}
+            </select>
+          )}
           {/* Yield — tappable, opens the per-shot override popup. Shown even
               when the profile has no yield (placeholder invites setting one). */}
           <button
@@ -511,6 +688,7 @@ export function PreShotDialog({
               display: "flex",
               alignItems: "baseline",
               gap: 6,
+              whiteSpace: "nowrap",
               background: "transparent",
               border: "none",
               padding: 0,
@@ -560,22 +738,22 @@ export function PreShotDialog({
         </div>
 
         {/* Profile target brew temp (PT-2) — readiness ampel (always shown when
-            the profile has a target, D4) + "Setzen" button (only when the BG
-            setpoint differs from the target). Starting a brew stays enabled in
-            every ampel color (non-blocking, Fork 2). */}
+            the profile has a target, D4). Steht ein Sollwert der Maschine (BG
+            oder BB) anders als das Profil, kommt an dieselbe Stelle ein gelber
+            Hinweis mit grossem Knopf — klein und grau wurde er uebersehen
+            (17.10.). Starting a brew stays enabled either way (non-blocking,
+            Fork 2). */}
         {profile.targetTempC !== null && (() => {
           const target = profile.targetTempC;
           const ist = liveBgTempC ?? null;
           // Ampel color = same 4-step thresholds as the dashboard gauge (§5.7),
           // relative to the profile target. Grey when the live temp is unknown.
           const istColor = ist !== null ? resolveColor(ist, target, false) : C.mut;
-          // "Setzen" only when a known setpoint differs from the target — gate
-          // on the SETPOINTS (not the live temp). Both BG and BB are set, so the
-          // button shows while EITHER still differs. Tolerance 0.05 °C since
+          // Gate on the SETPOINTS (not the live temp). Both BG and BB are set,
+          // so the hint shows while EITHER still differs. Tolerance 0.05 °C since
           // setpoints are whole/one-decimal values.
           const bgDiffers = currentBgSetpointC != null && Math.abs(currentBgSetpointC - target) >= 0.05;
           const bbDiffers = currentBbSetpointC != null && Math.abs(currentBbSetpointC - target) >= 0.05;
-          const showSet = onSetFromProfile !== undefined && (bgDiffers || bbDiffers);
           async function handleSet() {
             if (!onSetFromProfile) return;
             setSettingTemp(true);
@@ -585,53 +763,78 @@ export function PreShotDialog({
               setSettingTemp(false);
             }
           }
+          if (bgDiffers || bbDiffers) {
+            const machine = bgDiffers ? currentBgSetpointC! : currentBbSetpointC!;
+            const deg = (v: number) => (Number.isInteger(v) ? String(v) : lang === "de" ? v.toFixed(1).replace(".", ",") : v.toFixed(1));
+            // Am Tablet so hoch wie die alte Knopfzeile (der Dialog darf nicht
+            // scrollen), der Knopf sitzt buendig am rechten Rand; am Handy groesser.
+            return (
+              <div
+                role="status"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  marginTop: -4,
+                  marginBottom: 8,
+                  paddingLeft: 10,
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  background: C.orgD,
+                  border: `1px solid ${alpha(C.org, 0.45)}`,
+                }}
+              >
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: C.org, lineHeight: 1.25 }}>
+                  {t("preshot.tempMismatch", { machine: deg(machine), target: deg(target) })}
+                </span>
+                {onSetFromProfile !== undefined && (
+                  <button
+                    onClick={() => void handleSet()}
+                    disabled={settingTemp}
+                    style={{
+                      flexShrink: 0,
+                      alignSelf: "stretch",
+                      minHeight: mobile ? 34 : 26,
+                      padding: "0 12px",
+                      borderRadius: 0,
+                      background: C.org,
+                      border: "none",
+                      color: C.bg,
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      fontFamily: "inherit",
+                      whiteSpace: "nowrap",
+                      cursor: settingTemp ? "not-allowed" : "pointer",
+                      opacity: settingTemp ? 0.6 : 1,
+                    }}
+                  >
+                    {settingTemp ? t("preshot.settingTemp") : t("preshot.setTempTo", { target: deg(target) })}
+                  </button>
+                )}
+              </div>
+            );
+          }
           return (
             <div
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
                 marginTop: -4,
                 marginBottom: 10,
                 fontSize: 11,
                 color: C.mut,
               }}
             >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {t("preshot.profileTargetTemp")}{" "}
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: C.txtS }}>
-                  {target.toFixed(1)} °C
-                </span>
-                {ist !== null && (
-                  <>
-                    {" · "}
-                    {t("preshot.currentTemp")}{" "}
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: istColor }}>
-                      {ist.toFixed(1)} °C
-                    </span>
-                  </>
-                )}
-              </div>
-              {showSet && (
-                <button
-                  onClick={() => void handleSet()}
-                  disabled={settingTemp}
-                  style={{
-                    flexShrink: 0,
-                    padding: "5px 12px",
-                    borderRadius: 7,
-                    background: C.accG2,
-                    border: `1px solid ${C.acc}40`,
-                    color: C.acc,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    fontFamily: "inherit",
-                    cursor: settingTemp ? "not-allowed" : "pointer",
-                    opacity: settingTemp ? 0.6 : 1,
-                  }}
-                >
-                  {settingTemp ? t("preshot.settingTemp") : t("preshot.setTemp")}
-                </button>
+              {t("preshot.profileTargetTemp")}{" "}
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", color: C.txtS }}>
+                {target.toFixed(1)} °C
+              </span>
+              {ist !== null && (
+                <>
+                  {" · "}
+                  {t("preshot.currentTemp")}{" "}
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: istColor }}>
+                    {ist.toFixed(1)} °C
+                  </span>
+                </>
               )}
             </div>
           );
@@ -645,14 +848,14 @@ export function PreShotDialog({
           </div>
         ) : (
           <>
-            {/* Bean — always shown */}
-            <Field label={t("preshot.bean")}>
+            {/* Bean — immer, ausser beim Messlauf */}
+            {!measurement && <Field label={t("preshot.bean")}>
               <BeanPicker
                 beans={beans}
                 value={beanId}
                 onChange={(v) => {
                   setBeanId(v);
-                  void fetchDefaults(v, grinderId);
+                  void fetchDefaults(v, grinderId, v !== null ? profile.id : undefined, basketId);
                 }}
                 style={inputStyle}
               />
@@ -694,7 +897,7 @@ export function PreShotDialog({
                   {t("stockAlert.preBrew")}
                 </div>
               )}
-            </Field>
+            </Field>}
 
             {/* Grinder */}
             {fields.grinder && (
@@ -705,7 +908,7 @@ export function PreShotDialog({
                   onChange={(e) => {
                     const v = e.target.value === "" ? null : parseInt(e.target.value, 10);
                     setGrinderId(v);
-                    void fetchDefaults(beanId, v);
+                    void fetchDefaults(beanId, v, beanId !== null ? profile.id : undefined, basketId);
                   }}
                 >
                   <option value="">{t("preshot.noGrinder")}</option>
@@ -718,8 +921,8 @@ export function PreShotDialog({
 
             {/* Grind setting */}
             {fields.grindSetting && (
-              <Field label={t("preshot.grindSetting")}>
-                <GrindStepper value={grindSetting} onChange={setGrindSetting} inputStyle={numInputStyle} />
+              <Field label={t("preshot.grindSetting")} aside={grindAside}>
+                <GrindStepper value={grindSetting} onChange={(v) => { setGrindSetting(v); setGrindSource(null); }} inputStyle={numInputStyle} />
               </Field>
             )}
 
@@ -742,7 +945,7 @@ export function PreShotDialog({
                     <div
                       style={{
                         fontSize: 11,
-                        color: rpmOutOfRange ? C.red : C.dim,
+                        color: rpmOutOfRange ? C.red : C.mut,
                         marginTop: 4,
                       }}
                     >
@@ -814,6 +1017,23 @@ export function PreShotDialog({
         </div>
 
         <div ref={actionRef}>
+        {/* Sieb passt nicht zur Variante (weich — der zweite Klick startet trotzdem) */}
+        {basketWarn && basketMismatch && basket && defaultBasket && variant && (
+          <div
+            style={{
+              color: C.warnSoft,
+              background: alpha(C.warnSoft, 0.10),
+              border: `1px solid ${alpha(C.warnSoft, 0.30)}`,
+              borderRadius: 8,
+              fontSize: 12,
+              padding: "8px 12px",
+              margin: "4px 0 8px",
+            }}
+          >
+            {t("preshot.basketMismatch", { basket: basket.name, variant: variant.name, default: defaultBasket.name })}
+          </div>
+        )}
+
         {/* Scale-not-connected warning (soft — second click starts anyway) */}
         {scaleWarn && (
           <div
@@ -877,7 +1097,7 @@ export function PreShotDialog({
               ? t("preshot.starting")
               : doseMissing
                 ? t("preshot.startWithoutDose")
-              : scaleWarn
+              : scaleWarn || (basketWarn && basketMismatch)
                 ? t("preshot.startAnyway")
                 : t("preshot.start")}
           </button>

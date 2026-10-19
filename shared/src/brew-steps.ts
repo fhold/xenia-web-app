@@ -60,6 +60,9 @@ function checkStep(s: BrewStep, i: number): StepsCheck {
       if (s.controller !== undefined && !CONTROLLERS.includes(s.controller)) {
         return { ok: false, error: `Step ${i}: controller must be 'adaptive' or 'pi'` };
       }
+      if (s.adoptFlow !== undefined && typeof s.adoptFlow !== "boolean") {
+        return { ok: false, error: `Step ${i}: adoptFlow must be true or false` };
+      }
       const cap = checkOptionalCap(s.maxPressureBar, i, "maxPressureBar");
       if (!cap.ok) return cap;
       break;

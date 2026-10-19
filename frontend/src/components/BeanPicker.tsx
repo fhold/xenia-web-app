@@ -17,6 +17,7 @@
 
 import type { Bean } from "@shared/types.js";
 import { useTranslation } from "../i18n/index.js";
+import { formatRoastDate } from "../lib/dates.js";
 
 // ---------------------------------------------------------------------------
 // Shared bean-picker logic (exported for the callers' default-selection guards)
@@ -28,11 +29,9 @@ export function isPickableBean(b: Bean): boolean {
   return b.isActive && b.status !== "archived";
 }
 
-/** Roast-date label — "12. Jun." (matches Beans / Pre-Shot / Shot-Edit). */
+/** Roast-date label — "12. Jun. 2026", with year like everywhere (lib/dates). */
 function fmtRoastDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat("de-DE", { day: "numeric", month: "short" }).format(d);
+  return formatRoastDate(iso) || iso;
 }
 
 /**

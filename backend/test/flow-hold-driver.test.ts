@@ -1132,3 +1132,198 @@ test("Preinfusion: kommt kein Kaffee, beendet die Druckgrenze sie wie bisher", a
   assert.equal(state.stages.length, 2);
   assert.equal(state.stages[0].exitReason, "pressureBar");
 });
+
+// ---------------------------------------------------------------------------
+// Gagne: Druckspitze, dann den Fluss des Pucks uebernehmen
+// ---------------------------------------------------------------------------
+
+test("Druckrampe startet beim gemessenen Druck: nach der Füllstufe nimmt die Regelung die Pumpe nicht zurück", async () => {
+  // Frueher startete die Rampe beim letzten Druck-Sollwert (0): bei 4 bar im Puck las
+  // die Regelung „viel zu viel Druck“ und nahm die Pumpe auf ~24 % zurueck.
+  const { driver, calls } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { steps: [
+      { kind: "power", power: 40, exit: { pressureBar: 4 } },
+      { kind: "pressure", targetPressureBar: 9, rampMs: 4000, exit: { seconds: 8 } },
+    ] },
+    36, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  clock = 500;
+  driver.onFrame(frame({ pumpPressureBar: 2, flowRateGPerS: 0, scaleWeightG: 0 }));
+  clock = 900; // ≥ 4 bar → Druckstufe
+  driver.onFrame(frame({ pumpPressureBar: 4, flowRateGPerS: 0.3, scaleWeightG: 0.2 }));
+  for (let t = 1300; t <= 2500; t += 400) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: 4.2, flowRateGPerS: 0.6, scaleWeightG: 0.5 }));
+  }
+  await flush();
+  const powers = calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg as number);
+  assert.ok(Math.min(...powers) >= 38, `Pumpe an der Übergabe zurückgenommen: ${powers.join(", ")}`);
+});
+
+test("Fluss übernehmen: Ziel ist das Mittel der letzten Sekunde, verbucht als Ziel der Stufe, Übergabe stoßfrei", async () => {
+  const { driver, calls, state } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { steps: [
+      { kind: "pressure", targetPressureBar: 9, exit: { seconds: 2 } },
+      { kind: "flow", targetFlowGs: 1.0, adoptFlow: true, maxPressureBar: 9.5, exit: { weightG: 36 } },
+    ] },
+    36, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  // Druckspitze: der Puck liefert 1,5 … 1,7 g/s (Druck = Sollwert, Pumpe bleibt beim Seed).
+  for (const [t, f] of [[500, 1.2], [1000, 1.4], [1400, 1.5], [1800, 1.6]] as const) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: 9, flowRateGPerS: f, scaleWeightG: t / 400 }));
+  }
+  await flush();
+  const before = calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg as number).at(-1)!;
+  clock = 2200; // 2 s → Flussstufe; Mittel aus 1,5 / 1,6 / 1,7 = 1,6
+  driver.onFrame(frame({ pumpPressureBar: 9, flowRateGPerS: 1.7, scaleWeightG: 5.5 }));
+  clock = 2600;
+  driver.onFrame(frame({ pumpPressureBar: 9, flowRateGPerS: 1.62, scaleWeightG: 6.2 }));
+  await flush();
+  const recorded = state.stages as unknown as { stepKind: string; targetFlowGs: number | null }[];
+  assert.equal(recorded.length, 2);
+  assert.deepEqual([recorded[1]!.stepKind, recorded[1]!.targetFlowGs], ["flow", 1.6]);
+  const after = calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg as number).at(-1)!;
+  assert.ok(Math.abs(after - before) <= 6, `Übergabe nicht stoßfrei: ${before} % → ${after} %`);
+});
+
+test("Fluss übernehmen ohne Fluss beim Eintritt: es gilt der erwartete Wert", async () => {
+  const { driver, state } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { steps: [
+      { kind: "power", power: 40, exit: { seconds: 1 } },
+      { kind: "flow", targetFlowGs: 1.1, adoptFlow: true, exit: { weightG: 36 } },
+    ] },
+    36, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  for (const t of [500, 900, 1300]) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: 1, flowRateGPerS: 0, scaleWeightG: 0 }));
+  }
+  const recorded = state.stages as unknown as { targetFlowGs: number | null }[];
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[1]!.targetFlowGs, 1.1);
+});
+
+// ---------------------------------------------------------------------------
+// Nachsenden — die Maschine bestaetigt einen Pumpenbefehl, uebernimmt ihn aber
+// nicht (#271 25→20 %, #272 60→45 %). Nach 1,5 s geht derselbe Wert noch einmal
+// raus, hoechstens 3-mal je Befehl, dann eine Warnung; nie im Stopp.
+// ---------------------------------------------------------------------------
+
+/** Maschine mit gemeldeter Leistung: die ersten `swallow` Pumpenbefehle werden
+ *  bestaetigt, aber nicht uebernommen. */
+function makeSwallowingDriver(swallow: number, reportedBefore = 45) {
+  const machine = { reported: reportedBefore, swallow };
+  const writes: { at: number; level: number }[] = [];
+  const calls: ClientCall[] = [];
+  const events: Array<Record<string, unknown>> = [];
+  const log = {
+    child: () => log,
+    info: (o: Record<string, unknown>) => events.push(o),
+    warn: (o: Record<string, unknown>) => events.push(o),
+    error: (o: Record<string, unknown>) => events.push(o),
+  };
+  const client = {
+    async paddlePumppower(level: number) {
+      calls.push({ method: "paddlePumppower", arg: level });
+      writes.push({ at: clock, level });
+      if (machine.swallow > 0) machine.swallow--;
+      else machine.reported = level;
+    },
+    async paddleStop() { calls.push({ method: "paddleStop" }); return 200; },
+    async machineControl(action: string) { calls.push({ method: "machineControl", arg: action }); },
+    async overview() { return { SB_STATUS: 1, MA_STATUS: 1 }; },
+  };
+  const { recorder } = makeRecorder();
+  const driver = new FlowHoldDriver(client as never, recorder as never, settings as never, log as never);
+  return { driver, machine, writes, calls, events };
+}
+
+/** Haelt eine Leistungsstufe bei 60 % und tickt alle 370 ms bis `untilMs`. */
+async function runPowerHold(d: ReturnType<typeof makeSwallowingDriver>, untilMs: number, fromMs = 370) {
+  for (let t = fromMs; t <= untilMs; t += 370) {
+    clock = t;
+    d.driver.onFrame(frame({ scaleWeightG: 1 + t / 2000, flowRateGPerS: 0.5, pumpPressureBar: 4, pumpPwm: d.machine.reported }));
+    await flush();
+  }
+}
+
+const HOLD_60: BrewStep[] = [{ kind: "power", power: 60, exit: { seconds: 60 } }, { kind: "power", power: 60 }];
+
+test("Nachsenden: ein verschluckter Befehl geht nach 1,5 s mit demselben Wert noch einmal raus — dann folgt die Maschine", async () => {
+  const d = makeSwallowingDriver(1);
+  clock = 0;
+  await d.driver.start({ steps: HOLD_60 }, 36, ARM, frame({ pumpPwm: 45 }));
+  await runPowerHold(d, 8000);
+  assert.deepEqual(d.writes.map((w) => w.level), [60, 60], "genau ein Nachsenden");
+  assert.ok(d.writes[1]!.at >= 1500, `zu früh nachgesendet: ${d.writes[1]!.at} ms`);
+  assert.equal(d.machine.reported, 60);
+  assert.deepEqual(d.events.filter((e) => e.event === "pump_resend").map((e) => [e.power, e.attempt]), [[60, 1]]);
+  assert.ok(!d.events.some((e) => e.event === "pump_resend_failed"));
+});
+
+test("Nachsenden: höchstens 3-mal je Befehl im Abstand ≥ 1,5 s, dann eine Warnung — kein Abbruch", async () => {
+  const d = makeSwallowingDriver(99);
+  clock = 0;
+  await d.driver.start({ steps: HOLD_60 }, 36, ARM, frame({ pumpPwm: 45 }));
+  await runPowerHold(d, 15000);
+  assert.deepEqual(d.writes.map((w) => w.level), [60, 60, 60, 60], "Startbefehl + 3 Nachsendungen");
+  for (let i = 1; i < d.writes.length; i++) {
+    assert.ok(d.writes[i]!.at - d.writes[i - 1]!.at >= 1500, `Abstand ${d.writes[i]!.at - d.writes[i - 1]!.at} ms`);
+  }
+  assert.deepEqual(d.events.filter((e) => e.event === "pump_resend").map((e) => e.attempt), [1, 2, 3]);
+  const failed = d.events.filter((e) => e.event === "pump_resend_failed");
+  assert.equal(failed.length, 1, "genau eine Warnung");
+  assert.deepEqual([failed[0]!.power, failed[0]!.reported], [60, 45]);
+  assert.equal(d.driver.isActive(), true, "kein Abbruch");
+  assert.ok(!d.calls.some((c) => c.method === "machineControl"));
+});
+
+test("Nachsenden: folgt die Rückmeldung dem Befehl, wird nie nachgesendet", async () => {
+  const d = makeSwallowingDriver(0);
+  clock = 0;
+  await d.driver.start({ steps: HOLD_60 }, 36, ARM, frame({ pumpPwm: 45 }));
+  await runPowerHold(d, 15000);
+  assert.deepEqual(d.writes.map((w) => w.level), [60]);
+  assert.ok(!d.events.some((e) => e.event === "pump_resend" || e.event === "pump_resend_failed"));
+});
+
+test("Nachsenden: eine Abweichung bis 2 Punkte gilt als übernommen", async () => {
+  const d = makeSwallowingDriver(99, 58);
+  clock = 0;
+  await d.driver.start({ steps: HOLD_60 }, 36, ARM, frame({ pumpPwm: 58 }));
+  await runPowerHold(d, 8000);
+  assert.deepEqual(d.writes.map((w) => w.level), [60]);
+});
+
+test("Nachsenden: ein neuer Wert ist ein neuer Befehl und darf wieder nachgesendet werden", async () => {
+  const d = makeSwallowingDriver(99);
+  clock = 0;
+  await d.driver.start(
+    { steps: [{ kind: "power", power: 60, exit: { seconds: 8 } }, { kind: "power", power: 80, exit: { seconds: 60 } }, { kind: "power", power: 80 }] },
+    36, ARM, frame({ pumpPwm: 45 }),
+  );
+  await runPowerHold(d, 18000);
+  assert.deepEqual(d.writes.map((w) => w.level), [60, 60, 60, 60, 80, 80, 80, 80]);
+  assert.equal(d.events.filter((e) => e.event === "pump_resend_failed").length, 2);
+});
+
+test("⚠ Nachsenden nie im oder nach dem Stopp — der letzte Pumpenbefehl bleibt die 0", async () => {
+  const d = makeSwallowingDriver(99);
+  clock = 0;
+  await d.driver.start({ steps: HOLD_60 }, 36, ARM, frame({ pumpPwm: 45 }));
+  await runPowerHold(d, 1110);
+  d.driver.requestStop();
+  await flush();
+  // Die Maschine bleibt im Paddle-Modus und meldet weiter die falsche Leistung.
+  await runPowerHold(d, 8000, 1480);
+  const pump = d.calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg);
+  assert.deepEqual(pump, [60, 0], "kein Nachsenden im Stopp");
+  assert.ok(!d.events.some((e) => e.event === "pump_resend"));
+});

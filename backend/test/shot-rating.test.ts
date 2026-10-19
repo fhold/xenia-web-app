@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasRating, ratedWithoutStars, extractionMarks, nextChanneling } from "../../shared/src/shot-rating.js";
+import { hasRating, ratedWithoutStars, extractionMarks } from "../../shared/src/shot-rating.js";
 import type { RatedFields } from "../../shared/src/shot-rating.js";
 
 const leer: RatedFields = {
@@ -68,20 +68,4 @@ test("mehrere Marken stehen nebeneinander, under vor over vor channeling", () =>
     extractionMarks({ ...leer, extractionUnder: true, channeling: true }),
     ["under", "channeling"],
   );
-});
-
-// --- Channeling-Staerke -------------------------------------------------------
-
-test("Channeling-Knopf: aus → leicht → stark → aus", () => {
-  let s = { channeling: false, channelingSeverity: null as "light" | "strong" | null };
-  const seen: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    s = nextChanneling(s.channeling, s.channelingSeverity);
-    seen.push(s.channeling ? s.channelingSeverity! : "aus");
-  }
-  assert.deepEqual(seen, ["light", "strong", "aus", "light"]);
-});
-
-test("⚠ Channeling-Knopf: Altbestand ohne Staerke verschwindet nicht beim ersten Tipp", () => {
-  assert.deepEqual(nextChanneling(true, null), { channeling: true, channelingSeverity: "light" });
 });
