@@ -81,14 +81,22 @@ say "Looking for a new version"
 git fetch --quiet
 old="$(git rev-parse HEAD)"
 new="$(git rev-parse '@{u}')"
+# The build records the commit it was made from. A checkout pulled by hand
+# (e.g. to get this script) is newer than its build and gets built here.
+stamp="$repo/backend/dist/.built-from"
+built="$(cat "$stamp" 2>/dev/null || true)"
 if [ "$old" = "$new" ]; then
-  echo "  already up to date ($(git log -1 --format='%h %cs' HEAD))"
-  exit 0
+  if [ "$built" = "$new" ]; then
+    echo "  already up to date ($(git log -1 --format='%h %cs' HEAD))"
+    exit 0
+  fi
+  echo "  code is current ($(git log -1 --format='%h %cs' HEAD)), but not built yet"
+else
+  git merge-base --is-ancestor "$old" "$new" ||
+    fail "your branch has commits that are not upstream — cannot update automatically"
+  echo "  $(git rev-list --count "$old..$new") new commit(s):"
+  git log --format='    %h %cs %s' "$old..$new" | head -n 20
 fi
-git merge-base --is-ancestor "$old" "$new" ||
-  fail "your branch has commits that are not upstream — cannot update automatically"
-echo "  $(git rev-list --count "$old..$new") new commit(s):"
-git log --format='    %h %cs %s' "$old..$new" | head -n 20
 
 # --- Back up the database ---------------------------------------------------
 backup=""
@@ -110,7 +118,11 @@ fi
 
 rollback() {
   printf '\nTo go back to the previous version:\n'
-  printf '  cd %s && git reset --hard %s\n' "$repo" "${old:0:7}"
+  if [ "$old" != "$new" ]; then
+    printf '  cd %s && git reset --hard %s\n' "$repo" "${old:0:7}"
+  else
+    printf '  cd %s && git reflog   # find the commit before your last pull, then git reset --hard <it>\n' "$repo"
+  fi
   printf '  (cd backend && npm ci && npm run build) && (cd frontend && npm ci && npm run build)\n'
   [ -n "$backup" ] && printf '  only if the new version has already run: stop the app, then\n    cp %s %s  (and delete %s-wal / -shm)\n' \
     "$backup" "$db_path" "$db_path"
@@ -119,8 +131,10 @@ rollback() {
 trap 'rc=$?; [ "$rc" = 0 ] || [ "$dry" = 1 ] || rollback' EXIT
 
 # --- Update and build -------------------------------------------------------
-say "Getting the new version"
-run git merge --ff-only --quiet "$new"
+if [ "$old" != "$new" ]; then
+  say "Getting the new version"
+  run git merge --ff-only --quiet "$new"
+fi
 
 say "Installing dependencies and building"
 for pkg in backend frontend; do
@@ -132,6 +146,8 @@ for pkg in backend frontend; do
       fail "$pkg did not build — the running app was not touched"
   fi
 done
+
+[ "$dry" = 1 ] || echo "$new" > "$stamp"
 
 # --- Restart ----------------------------------------------------------------
 if [ "$has_service" = 0 ]; then
@@ -153,7 +169,8 @@ fi
 for _ in $(seq 1 30); do
   if node -e 'fetch(process.argv[1]).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
        "http://localhost:$port/health"; then
-    say "Updated ${old:0:7} → ${new:0:7}${backup:+ — backup: $backup}"
+    if [ "$old" != "$new" ]; then say "Updated ${old:0:7} → ${new:0:7}${backup:+ — backup: $backup}"
+    else say "Built and restarted ${new:0:7}${backup:+ — backup: $backup}"; fi
     exit 0
   fi
   sleep 1
