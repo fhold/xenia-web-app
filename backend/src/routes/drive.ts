@@ -24,6 +24,7 @@ import { checkMachineReadyToStart } from "../lib/start-gate.js";
 import { driveStartBody } from "../lib/body-schemas.js";
 import { resolveStart } from "../db/variant-repo.js";
 import { SqliteBasketRepo } from "../db/basket-repo.js";
+import { endsWithoutYield } from "../../../shared/src/brew-steps.js";
 
 export function registerDriveRoutes(
   app: FastifyInstance,
@@ -115,15 +116,7 @@ export function registerDriveRoutes(
       typeof yieldTargetOverrideG === "number" &&
       Number.isFinite(yieldTargetOverrideG) &&
       yieldTargetOverrideG > 0;
-    const yieldTarget = overrideValid ? yieldTargetOverrideG : profileYield;
-    if (yieldTarget === null || yieldTarget === undefined || yieldTarget <= 0) {
-      reply.status(400);
-      const res: ApiResponse = {
-        ok: false,
-        error: "Ein gültiges Zielgewicht (yield target) ist für den Flow-Hold-Bezug erforderlich.",
-      };
-      return res;
-    }
+    const wanted = overrideValid ? yieldTargetOverrideG : profileYield;
 
     // Merge the profile's step sequence (BrewProfile) into the overrides. Only
     // defined keys are copied so an explicit request override always wins and we
@@ -135,6 +128,16 @@ export function registerDriveRoutes(
       : requestedSize === "double"
         ? (profile.brewStepsDouble ?? profile.brewSteps)
         : profile.brewSteps;
+    // Ohne Ziel endet der Bezug mit der letzten Stufe — die braucht dann einen Ausstieg.
+    const yieldTarget = wanted !== null && wanted !== undefined && wanted > 0 ? wanted : null;
+    if (yieldTarget === null && !endsWithoutYield(overrides?.steps ?? bp?.steps)) {
+      reply.status(400);
+      const res: ApiResponse = {
+        ok: false,
+        error: "Ohne Zielgewicht braucht die letzte Stufe einen Ausstieg (Zeit, Gewicht, Druck oder Fluss).",
+      };
+      return res;
+    }
     if (bp) {
       const fromProfile: Record<string, unknown> = {};
       if (bp.steps !== undefined) fromProfile.steps = bp.steps;

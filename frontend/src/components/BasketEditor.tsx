@@ -9,6 +9,7 @@ import { X } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import type { Basket, BasketCreate } from "@shared/types.js";
 import theme from "../theme.js";
+import { dec } from "../lib/num.js";
 
 const C = theme;
 
@@ -47,7 +48,7 @@ export function BasketEditor({ basket, onSave, onDelete, onClose }: BasketEditor
   const isEdit = basket !== undefined;
   const [name, setName] = useState(basket?.name ?? "");
   const [description, setDescription] = useState(basket?.description ?? "");
-  const [dose, setDose] = useState(basket?.nominalDoseG != null ? String(basket.nominalDoseG).replace(".", ",") : "");
+  const [dose, setDose] = useState(basket?.nominalDoseG != null ? dec(String(basket.nominalDoseG)) : "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);

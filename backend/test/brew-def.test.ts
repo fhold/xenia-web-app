@@ -61,6 +61,12 @@ test("⚠ kanonisch: eine umbenannte Phase ist dieselbe Profilversion", () => {
   assert.equal(canon(unnamed), canon(PROFILE_16));
 });
 
+test("⚠ kanonisch: ein Ton am Phasenende ist dieselbe Profilversion", () => {
+  const toned = structuredClone(PROFILE_16) as { steps: Record<string, unknown>[] };
+  toned.steps[0]!.tone = true;
+  assert.equal(canon(toned), canon(PROFILE_16));
+});
+
 test("kanonisch: Schluesselreihenfolge zaehlt nicht", () => {
   const reordered = {
     steps: [

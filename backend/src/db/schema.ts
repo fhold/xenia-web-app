@@ -1701,6 +1701,12 @@ export function applySchema(): void {
   if (freshKind) adoptProfileKind(db);
   // Versuch: ein Profil nur zum Ausprobieren (Kolben in Liste und Editor). Nur Anzeige.
   addColumnIfMissing(db, "profile", "trial", "INTEGER NOT NULL DEFAULT 0");
+  // Einordnung (Flavio 24.10.): wofuer das Profil gedacht ist — JSON-Liste aus
+  // dark / light / filter, mehrere erlaubt, NULL = nicht eingeordnet. Nur Anzeige/Filter.
+  addColumnIfMissing(db, "profile", "fit", "TEXT");
+  // Archiv (Flavio 25.10.): gefahrene, aber ueberholte Profile verschwinden aus Liste
+  // und Favoriten, bleiben aber fuer Historie und Skripte da. Umkehrbar.
+  addColumnIfMissing(db, "profile", "archived", "INTEGER NOT NULL DEFAULT 0");
 
   const freshVariantColumn = !(db.prepare("PRAGMA table_info(shot)").all() as Array<{ name: string }>).some((c) => c.name === "variant_id");
   addColumnIfMissing(db, "shot", "variant_id", "INTEGER REFERENCES profile_variant(id) ON DELETE SET NULL");

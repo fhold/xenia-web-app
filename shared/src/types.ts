@@ -152,7 +152,20 @@ export type WsMessage =
   | { type: "shotUpdated"; data: Shot }
   | { type: "maintenanceStarted"; data: MaintenanceRun }
   | { type: "maintenanceEnded" }
-  | { type: "profilesChanged" };
+  | { type: "profilesChanged" }
+  | { type: "driveStage"; data: DriveStage };
+
+/** Die Stufe, in die ein App-Bezug (Flow-Hold) gerade gewechselt ist — fuer die
+ *  Zeile ueber dem Diagramm. Skript-Bezuege melden keine Stufe: die Maschine
+ *  verraet nicht, welchen Skriptschritt sie faehrt. */
+export interface DriveStage {
+  index: number;
+  kind: BrewStep["kind"];
+  /** Name der Stufe im Profil; null = keiner vergeben. */
+  name: string | null;
+  /** Am Ende der Stufe einen Ton spielen (BrewStep.tone). */
+  tone: boolean;
+}
 
 /** ÄW-B: an app-initiated maintenance run in progress (e.g. a backflush script).
  *  These extract no coffee and are never recorded as a shot — the dashboard shows
@@ -232,6 +245,15 @@ export interface ScaleStatus {
 /** "test" = Messlauf-Profil: Laeufe werden als Messlauf aufgezeichnet (siehe ShotCategory). */
 export type ProfileKind = "brew" | "maintenance" | "test";
 
+/** Einordnung eines Profils: Espresso fuer dunkle bzw. helle Roestungen, Filter. */
+export const PROFILE_FITS = ["dark", "light", "filter"] as const;
+export type ProfileFit = (typeof PROFILE_FITS)[number];
+
+/** Gueltige Einordnung: Liste ohne Doppel aus PROFILE_FITS. */
+export function isProfileFitList(v: unknown): v is ProfileFit[] {
+  return Array.isArray(v) && v.every((x) => (PROFILE_FITS as readonly unknown[]).includes(x)) && new Set(v).size === v.length;
+}
+
 export interface Profile {
   id: number;
   name: string;
@@ -243,6 +265,10 @@ export interface Profile {
   kind: ProfileKind;
   /** Versuch: nur zum Ausprobieren — der Kolben in Liste und Editor. Nur Anzeige. */
   isTrial: boolean;
+  /** Einordnung: wofuer das Profil gedacht ist (mehrere moeglich, leer = nicht eingeordnet). Nur Filter in der Liste. */
+  fit: ProfileFit[];
+  /** Archiviert: nicht in der Liste und nicht Favorit, bleibt fuer Historie und Skripte. Umkehrbar. */
+  isArchived: boolean;
   // no icon field — name alone identifies a profile
   // null = flow-driven profile (brewSteps), no Xenia script.
   scriptIdSingle: number | null;
@@ -320,6 +346,10 @@ export type ProfileCreate = {
   kind?: ProfileKind;
   /** Versuch (Kolben); fehlt es beim Anlegen, ist es keiner. */
   isTrial?: boolean;
+  /** Einordnung; fehlt sie beim Anlegen, ist das Profil nicht eingeordnet. */
+  fit?: ProfileFit[];
+  /** Archiviert; fehlt es beim Anlegen, ist es das nicht. */
+  isArchived?: boolean;
   /** null = flow-driven profile (brewSteps present), no Xenia script. */
   scriptIdSingle: number | null;
   scriptIdDouble?: number | null;
@@ -458,6 +488,11 @@ export interface StepExit {
    * ein `seconds`-Ausstieg als Netz gehoert dazu.
    */
   pressureBelowBar?: number;
+  /**
+   * Flow (g/s) risen to — advances when measured cup flow ≥ this (Decent
+   * `flow_over`). Fires at once, like `pressureBar`; no arming.
+   */
+  flowAboveGs?: number;
 }
 
 /** Hold a target flow (g/s). Optional pressure cap (limiter). */
@@ -465,6 +500,8 @@ export interface FlowStep {
   kind: "flow";
   /** Optional freetext phase name; the UI falls back to a derived label. */
   name?: string;
+  /** Ton am Ende der Stufe, auf dem Geraet, das den Bezug gestartet hat. */
+  tone?: boolean;
   targetFlowGs: number;
   maxPressureBar?: number;
   controller?: FlowControllerKind;
@@ -485,11 +522,18 @@ export interface PressureStep {
   kind: "pressure";
   /** Optional freetext phase name; the UI falls back to a derived label. */
   name?: string;
+  /** Ton am Ende der Stufe, auf dem Geraet, das den Bezug gestartet hat. */
+  tone?: boolean;
   targetPressureBar: number;
   maxFlowGs?: number;
   /** Linear setpoint ramp: interpolate from the entry pressure to
    *  `targetPressureBar` over `rampMs`, then hold. Omitted/0 = jump to target. */
   rampMs?: number;
+  /** Decent HOLD-P: Ziel ist der Druck beim Eintritt, nicht `targetPressureBar`
+   *  — die Stufe haelt, was der Puck gerade aufbaut. `targetPressureBar` bleibt
+   *  der erwartete Wert (Kurve) und gilt, wenn beim Eintritt noch kein Druck
+   *  da ist (unter 0,5 bar). Gegenstueck zu FlowStep.adoptFlow. */
+  adoptPressure?: boolean;
   exit: StepExit;
 }
 
@@ -503,6 +547,8 @@ export interface PowerStep {
   kind: "power";
   /** Optional freetext phase name; the UI falls back to a derived label. */
   name?: string;
+  /** Ton am Ende der Stufe, auf dem Geraet, das den Bezug gestartet hat. */
+  tone?: boolean;
   power: number;
   maxPressureBar?: number;
   maxFlowGs?: number;
@@ -513,6 +559,10 @@ export interface PowerStep {
 /** Wie zuegig die Preinfusion den Puck saettigt, sobald er Gegendruck aufbaut. */
 export type PreinfusionGentleness = "gentle" | "normal" | "brisk";
 
+/** Wie schnell die Preinfusion den leeren Raum ueber dem Kaffee fuellt, bis der
+ *  erste Gegendruck kommt: "normal" mit 3,5 ml/s, "fast" mit voller Pumpe. */
+export type PreinfusionFill = "normal" | "fast";
+
 /** Preinfusion ueber den rechnerischen Zulauf (shared/pump-curve.ts): fuellen mit
  *  festem Zulauf, ab ~1 bar Gegendruck sanfter saettigen, und sobald der Kaffee
  *  in der Tasse ankommt (Fluss ≥ 90 % des Startflusses der naechsten Flussstufe)
@@ -522,8 +572,12 @@ export interface PreinfusionStep {
   kind: "preinfusion";
   /** Optional freetext phase name; the UI falls back to a derived label. */
   name?: string;
+  /** Ton am Ende der Stufe, auf dem Geraet, das den Bezug gestartet hat. */
+  tone?: boolean;
   /** Omitted = "normal". */
   gentleness?: PreinfusionGentleness;
+  /** Omitted = "normal" — so bleibt der Hash bestehender Profile gleich. */
+  fill?: PreinfusionFill;
   /** Sanfter Anlauf der Pumpe (ms). Omitted = 3000. */
   rampMs?: number;
   exit: StepExit;
@@ -567,7 +621,8 @@ export interface DriveStartResult {
   ok: true;
   /** null for step-based profiles that carry no Xenia script. */
   scriptId: number | null;
-  yieldTargetG: number;
+  /** null = kein Ziel, die letzte Stufe beendet den Bezug. */
+  yieldTargetG: number | null;
   targetFlowGs: number;
 }
 
@@ -1014,6 +1069,14 @@ export interface ShotCompare {
   previous: { id: number; startedAt: number; profileName: string | null; grindSetting: number | null } | null;
 }
 
+/** GET /api/shots/:id/compare-suggestions — Vorschlaege fuer „Bezuege vergleichen“. */
+export interface CompareSuggestions {
+  /** Referenz ★ derselben Sorte, sofern es nicht dieser Bezug selbst ist. */
+  reference: ShotListItem | null;
+  /** Letzter beendeter Bezug derselben Sorte davor; null, wenn er die Referenz ist. */
+  previous: ShotListItem | null;
+}
+
 /**
  * Canonical taste-tag keys for the shot rating. UI labels come from i18n
  * (`shotRating.tags.*`). Stored as a JSON string array on `Shot.tasteTags`.
@@ -1150,7 +1213,7 @@ export interface ShotStage {
   targetPower: number | null;
   /** Which StepExit branch fired to LEAVE this stage; null for the final stage
    *  (ended by the master yield stop / manual / watchdog). */
-  exitReason: "seconds" | "weightG" | "pressureBar" | "pressureBelowBar" | "flowGs" | "arrived" | null;
+  exitReason: "seconds" | "weightG" | "pressureBar" | "pressureBelowBar" | "flowGs" | "flowAboveGs" | "arrived" | null;
   /** ms since shot.startedAt when this stage was entered. */
   enteredMs: number;
 }

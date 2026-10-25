@@ -333,3 +333,12 @@ test("Phasennamen: zum eigenen Skript gespeichert, an App-Varianten nicht; ungü
   assert.match(checkVariants([{ ...v, phaseNames: "x" }], has) ?? "", /Phasennamen/);
   assert.equal(checkVariants([{ ...v, phaseNames: [null, "ok"] }], has), null);
 });
+
+test("ohne Yield: App-Variante gilt, wenn die letzte Phase einen Ausstieg hat (sie beendet den Bezug)", () => {
+  const ends = { version: 1 as const, steps: [{ kind: "flow" as const, targetFlowGs: 2, exit: { seconds: 5 } }, { kind: "flow" as const, targetFlowGs: 1.5, exit: { seconds: 30 } }] };
+  const has = { basket: () => true, script: () => true, validSteps: () => null };
+  const v = { name: "Tee", defaultBasketId: null, yieldG: null, scriptId: null, brewSteps: ends };
+  assert.equal(checkVariants([v], has), null);
+  assert.equal(checkVariants([v, { ...v, name: "b", brewSteps: null, sameAs: 0 }], has), null);
+  assert.match(checkVariants([{ ...v, brewSteps: steps }], has) ?? "", /Yield — oder einen Ausstieg in der letzten Phase/);
+});

@@ -84,7 +84,7 @@ export interface ShotStageInput {
   targetFlowGs: number | null;
   targetPressureBar: number | null;
   targetPower: number | null;
-  exitReason: "seconds" | "weightG" | "pressureBar" | "pressureBelowBar" | "flowGs" | "arrived" | null;
+  exitReason: "seconds" | "weightG" | "pressureBar" | "pressureBelowBar" | "flowGs" | "flowAboveGs" | "arrived" | null;
   enteredMs: number;
 }
 
@@ -126,6 +126,8 @@ export interface ShotListFilter {
   /** Inclusive lower/upper bound on started_at (unix ms). */
   startMs?: number;
   endMs?: number;
+  /** Nur diese Bezuege (Vorschlaege zum Vergleichen). */
+  ids?: number[];
 }
 
 /** Which past shots to pull in as ghosts, and how the group is defined. */
@@ -238,6 +240,8 @@ export interface ShotRepo {
   listNetworkShots(filter: { coffeeId?: number; profileId?: number }): NetShot[];
   /** Bewertung: der letzte beendete Bezug derselben Sorte vor diesem; null ohne Sorte. */
   findPreviousSameCoffee(id: number): ShotCompare["previous"];
+  /** Vergleich: die Referenz ★ derselben Sorte, ausser dieser Bezug ist es selbst. */
+  findReferenceSameCoffee(id: number): number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,6 +543,7 @@ export class SqliteShotRepo implements ShotRepo {
     if (filter.rating !== undefined)    { conds.push("s.rating = ?");     params.push(filter.rating); }
     if (filter.startMs !== undefined)   { conds.push("s.started_at >= ?"); params.push(filter.startMs); }
     if (filter.endMs !== undefined)     { conds.push("s.started_at <= ?"); params.push(filter.endMs); }
+    if (filter.ids !== undefined)       { conds.push(`s.id IN (${filter.ids.map(() => "?").join(", ") || "NULL"})`); params.push(...filter.ids); }
     const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
 
     const totalRow = db
@@ -764,6 +769,19 @@ export class SqliteShotRepo implements ShotRepo {
       : null;
   }
 
+  findReferenceSameCoffee(id: number): number | null {
+    const row = getDb()
+      .prepare(
+        `SELECT bb.shot_id
+           FROM shot s
+           JOIN bean b ON b.id = s.bean_id
+           JOIN best_brew bb ON bb.coffee_id = b.coffee_id AND bb.shot_id <> s.id
+          WHERE s.id = ?`,
+      )
+      .get(id) as { shot_id: number } | undefined;
+    return row ? row.shot_id : null;
+  }
+
   listNetworkShots(filter: { coffeeId?: number; profileId?: number }): NetShot[] {
     const conds = ["s.category = 'brew'", "s.ended_at IS NOT NULL"];
     const params: number[] = [];
@@ -901,7 +919,7 @@ interface RawShotStageRow {
   target_flow_gs: number | null;
   target_pressure_bar: number | null;
   target_power: number | null;
-  exit_reason: "seconds" | "weightG" | "pressureBar" | "flowGs" | "pressureBelowBar" | "arrived" | null;
+  exit_reason: "seconds" | "weightG" | "pressureBar" | "flowGs" | "pressureBelowBar" | "flowAboveGs" | "arrived" | null;
   entered_ms: number;
 }
 

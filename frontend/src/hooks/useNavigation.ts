@@ -25,6 +25,8 @@ export interface NavLocation {
   view: ViewId;
   /** Profil-Editor offen (Profil-Id oder neues Profil). */
   editor?: number | "new" | null;
+  /** In dieser Variante oeffnet der Editor (Sprung aus einem Bezug). */
+  editorVariant?: number | null;
   /** Sorte im Detail. */
   coffeeId?: number | null;
   /** Historie: Sprungziel bzw. gemerkter Zustand. */

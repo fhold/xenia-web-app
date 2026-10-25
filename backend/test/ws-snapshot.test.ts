@@ -89,3 +89,19 @@ test("H-6: the replayed shot carries later field updates", async () => {
   const started = msgs.find((m) => m.type === "shotStarted") as { data: Shot } | undefined;
   assert.equal(started?.data.doseG, 18);
 });
+
+test("Stufe eines App-Bezugs: ein Client, der mitten im Bezug verbindet, bekommt sie — nach dem Ende nicht mehr", async () => {
+  const { hub, url, stop } = await startHub();
+  hub.broadcastDriveStage({ index: 0, kind: "preinfusion", name: "Füllen" });
+  hub.broadcastShotStarted(shot(42));
+  hub.broadcastDriveStage({ index: 1, kind: "flow", name: "Fluss halten" });
+
+  const during = await snapshot(url);
+  const stage = during.find((m) => m.type === "driveStage") as { data: unknown } | undefined;
+  assert.deepEqual(stage?.data, { index: 1, kind: "flow", name: "Fluss halten" });
+
+  hub.broadcastShotEnded(shot(42), 100);
+  const after = await snapshot(url);
+  stop();
+  assert.equal(after.find((m) => m.type === "driveStage"), undefined);
+});

@@ -15,12 +15,17 @@ import { GrinderEditor } from "../components/GrinderEditor.js";
 import { useGrinders } from "../hooks/useGrinders.js";
 import { BasketEditor } from "../components/BasketEditor.js";
 import { useBaskets } from "../hooks/useBaskets.js";
-import { useTranslation, setLanguage } from "../i18n/index.js";
+import { t, useTranslation, setLanguage } from "../i18n/index.js";
 import type { Language } from "../i18n/index.js";
 import type { Grinder, GrinderCreate, GrinderUpdate, Basket } from "@shared/types.js";
 import { normalizeMachineAddress } from "@shared/machine-address.js";
 import type { ConnectionState } from "../hooks/useXeniaFrame.js";
 import theme from "../theme.js";
+import { dec } from "../lib/num.js";
+import { ColorSchemes } from "../components/ColorSchemes.js";
+import { useThemeChoice } from "../themeStartup.js";
+import { parseColorSchemes, UI_THEME_PATTERN } from "@shared/color-scheme.js";
+import type { ColorScheme } from "@shared/color-scheme.js";
 
 const C = theme;
 
@@ -61,6 +66,12 @@ interface FormState {
   // shot recording
   show_tds_input: boolean;
   rating_compare_prev: boolean;
+  rating_field_acidity: boolean;
+  rating_field_bitterness: boolean;
+  rating_field_taste: boolean;
+  rating_field_extraction: boolean;
+  rating_field_grind_note: boolean;
+  rating_field_facts: boolean;
   // bean editor section visibility
   bean_fields_origin: boolean;
   bean_fields_inventory: boolean;
@@ -74,6 +85,9 @@ interface FormState {
   preshot_field_profile_notes: boolean;
   // language
   language: Language;
+  // Oberfläche: Darstellung und eigene Farbschemata
+  ui_theme: string;
+  ui_color_schemes: ColorScheme[];
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -96,9 +110,9 @@ function validateNum(key: string, raw: string): string | undefined {
   const rule = NUM_RULES[key];
   if (!rule) return undefined;
   const num = parseFloat(raw);
-  if (isNaN(num)) return "Ungültiger Wert";
-  if (num < rule.min) return `Minimum: ${rule.min}`;
-  if (num > rule.max) return `Maximum: ${rule.max}`;
+  if (isNaN(num)) return t("ui.settings.invalidValue");
+  if (num < rule.min) return t("ui.settings.min", { v: rule.min });
+  if (num > rule.max) return t("ui.settings.max", { v: rule.max });
   return undefined;
 }
 
@@ -276,6 +290,12 @@ export function Settings({
           brew_by_weight_watchdog_overshoot_g: data["brew_by_weight_watchdog_overshoot_g"] ?? "7",
           show_tds_input:               (data["show_tds_input"] ?? "false") === "true",
           rating_compare_prev:          (data["rating_compare_prev"] ?? "false") === "true",
+          rating_field_acidity:         (data["rating_field_acidity"]    ?? "true") === "true",
+          rating_field_bitterness:      (data["rating_field_bitterness"] ?? "true") === "true",
+          rating_field_taste:           (data["rating_field_taste"]      ?? "true") === "true",
+          rating_field_extraction:      (data["rating_field_extraction"] ?? "true") === "true",
+          rating_field_grind_note:      (data["rating_field_grind_note"] ?? "true") === "true",
+          rating_field_facts:           (data["rating_field_facts"]      ?? "true") === "true",
           bean_fields_origin:           (data["bean_fields_origin"]       ?? "true") === "true",
           bean_fields_inventory:        (data["bean_fields_inventory"]    ?? "true") === "true",
           bean_fields_aroma:            (data["bean_fields_aroma"]        ?? "true") === "true",
@@ -286,6 +306,8 @@ export function Settings({
           preshot_field_dose:           (data["preshot_field_dose"]          ?? "true")  === "true",
           preshot_field_profile_notes:  (data["preshot_field_profile_notes"] ?? "true")  === "true",
           language:                     (data["language"] === "en" ? "en" : "de") as Language,
+          ui_theme:                     data["ui_theme"] && UI_THEME_PATTERN.test(data["ui_theme"]) ? data["ui_theme"] : "dark",
+          ui_color_schemes:             parseColorSchemes(data["ui_color_schemes"]),
         });
       })
       .catch((err: unknown) => {
@@ -403,7 +425,7 @@ export function Settings({
   if (loadError) {
     return (
       <div style={{ color: C.red, fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-        Einstellungen konnten nicht geladen werden.
+        {t("ui.settings.loadError")}
       </div>
     );
   }
@@ -411,7 +433,7 @@ export function Settings({
   if (!form) {
     return (
       <div style={{ color: C.mut, fontSize: 13, padding: "40px 0", textAlign: "center" }}>
-        Lade…
+        {t("ui.common.loading")}
       </div>
     );
   }
@@ -949,7 +971,7 @@ export function Settings({
               <span style={{ fontSize: 13, color: C.txt, fontWeight: 500 }}>{sv.name}</span>
               {sv.nominalDoseG !== null && (
                 <span style={{ fontSize: 11, color: C.mut, marginLeft: 8, fontFamily: "'JetBrains Mono', monospace" }}>
-                  {String(sv.nominalDoseG).replace(".", ",")} g
+                  {dec(String(sv.nominalDoseG))} g
                 </span>
               )}
             </div>
@@ -1177,8 +1199,35 @@ export function Settings({
         />
       </Row>
 
+      {/* Bewertung: welche Felder der Dialog zeigt — Gesamtnote, Channeling und
+          Notiz sind immer da; Ausgeblendetes bleibt gespeichert. */}
+      {([
+        ["rating_field_facts", "facts"],
+        ["rating_field_acidity", "acidity"],
+        ["rating_field_bitterness", "bitterness"],
+        ["rating_field_taste", "taste"],
+        ["rating_field_extraction", "extraction"],
+        ["rating_field_grind_note", "grindNote"],
+      ] as const).map(([key, name]) => (
+        <Row
+          key={key}
+          label={t(`settings.shotInput.ratingFields.${name}.label`)}
+          description={t(`settings.shotInput.ratingFields.${name}.description`)}
+          saveStatus={saveStatuses[key]}
+          {...rowProps}
+        >
+          <Toggle
+            checked={form[key]}
+            onChange={(val) => {
+              setField(key, val);
+              void saveToggle(key, val);
+            }}
+          />
+        </Row>
+      ))}
+
       {/* ---- Sprache ---- */}
-      <SectionHeader title={t("settings.language.title")} />
+      <SectionHeader title={t("settings.ui.title")} />
 
       <Row
         label={t("settings.language.select.label")}
@@ -1216,6 +1265,56 @@ export function Settings({
           <option value="en">{t("settings.language.options.en")}</option>
         </select>
       </Row>
+
+      <Row
+        label={t("settings.ui.theme.label")}
+        description={t("settings.ui.theme.description")}
+        saveStatus={saveStatuses["ui_theme"]}
+        {...rowProps}
+      >
+        <select
+          value={form.ui_theme}
+          onChange={async (e) => {
+            const ui = e.target.value;
+            setStatus("ui_theme", "saving");
+            if (await putSetting("ui_theme", ui)) useThemeChoice({ ui, schemes: form.ui_color_schemes });
+            else setStatus("ui_theme", "error");
+          }}
+          style={{
+            background: C.card,
+            color: C.txt,
+            border: `1px solid ${C.bdr}`,
+            borderRadius: 6,
+            padding: "6px 10px",
+            fontSize: 13,
+            fontFamily: "inherit",
+            cursor: "pointer",
+          }}
+        >
+          <option value="dark">{t("settings.ui.theme.options.dark")}</option>
+          <option value="light">{t("settings.ui.theme.options.light")}</option>
+          <option value="system">{t("settings.ui.theme.options.system")}</option>
+          {form.ui_color_schemes.map((sc) => (
+            <option key={sc.id} value={`scheme:${sc.id}`}>{sc.name}</option>
+          ))}
+        </select>
+      </Row>
+
+      <ColorSchemes
+        schemes={form.ui_color_schemes}
+        active={form.ui_theme}
+        onSave={async (next, use) => {
+          if (!(await putSetting("ui_color_schemes", JSON.stringify(next)))) return false;
+          if (use !== null && use !== form.ui_theme && !(await putSetting("ui_theme", use))) return false;
+          const ui = use ?? form.ui_theme;
+          // Neu laden nur, wenn sich das gerade gültige Schema ändert.
+          const was = form.ui_color_schemes.find((sc) => `scheme:${sc.id}` === form.ui_theme);
+          const now = next.find((sc) => `scheme:${sc.id}` === ui);
+          if (ui !== form.ui_theme || JSON.stringify(was) !== JSON.stringify(now)) useThemeChoice({ ui, schemes: next });
+          else setField("ui_color_schemes", next);
+          return true;
+        }}
+      />
 
       {/* GrinderEditor modal */}
       {grinderEditor !== null && (

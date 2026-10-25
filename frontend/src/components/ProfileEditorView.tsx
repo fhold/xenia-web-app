@@ -22,14 +22,15 @@
 
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { NavGuardContext } from "../hooks/useNavigation.js";
-import { ChevronLeft, ChevronRight, FlaskConical, HelpCircle, Plus, Redo2, Star, Trash2, Undo2 } from "lucide-react";
+import { Bell, ChevronLeft, ChevronRight, FlaskConical, HelpCircle, Plus, Redo2, Star, Trash2, Undo2 } from "lucide-react";
 import { HoverTip } from "./HoverTip.js";
-import type { Basket, BrewStep, ParsedCmd, PreinfusionGentleness, Profile, ProfileCreate, ProfileKind, ProfileVariantInput, XeniaScript } from "@shared/types.js";
+import type { Basket, BrewStep, ParsedCmd, PreinfusionFill, PreinfusionGentleness, Profile, ProfileFit, ProfileCreate, ProfileKind, ProfileVariantInput, XeniaScript } from "@shared/types.js";
+import { PROFILE_FITS } from "@shared/types.js";
 import { parseScript } from "@shared/script-parser.js";
 import { serializeScript } from "@shared/script-serializer.js";
 import { scriptToTimeline } from "@shared/script-timeline.js";
 import { validateScript } from "@shared/script-validator.js";
-import { validateBrewSteps } from "@shared/brew-steps.js";
+import { endsWithoutYield, validateBrewSteps } from "@shared/brew-steps.js";
 import { setArg, moveCmd, removeCmd, insertWithWait, editableRange, defaultInsertIndex, makeCmd, defaultArgs } from "@shared/script-edit.js";
 import { SCRIPT_MODEL_HELP } from "@shared/script-help.js";
 import { PREINFUSION_ARRIVAL_FRACTION } from "@shared/pump-curve.js";
@@ -50,6 +51,8 @@ import { ScriptCommandList } from "./ScriptCommandList.js";
 import { stepsToTimeline } from "@shared/steps-curve.js";
 import { InsertMenu, Modal, modalTitle, modalText } from "./ScriptInsertMenu.js";
 import theme, { alpha } from "../theme.js";
+import { t, useTranslation } from "../i18n/index.js";
+import { dec } from "../lib/num.js";
 
 const C = theme;
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
@@ -97,6 +100,8 @@ interface Draft {
   fav: boolean;
   /** Versuch: nur zum Ausprobieren (Kolben). */
   trial: boolean;
+  /** Einordnung fuer die Filter der Profilliste — in der Reihenfolge von PROFILE_FITS. */
+  fit: ProfileFit[];
   tempC: number | null;
   notes: string;
   variants: VariantDraft[];
@@ -130,7 +135,7 @@ function scriptCurve(scripts: XeniaScript[], orphans: XeniaScript[], id: number,
 const stepsCurve = (steps: BrewStep[]): CurveDraft => ({ ...NO_CURVE, steps, start: { cmds: null, steps } });
 
 function initDraft(p: Profile | null, scripts: XeniaScript[], baskets: Basket[], orphans: XeniaScript[]): Draft {
-  const base = { name: p?.name ?? "", fav: p?.isFavorite ?? false, trial: p?.isTrial ?? false, tempC: p?.targetTempC ?? null, notes: p?.notes ?? "" };
+  const base = { name: p?.name ?? "", fav: p?.isFavorite ?? false, trial: p?.isTrial ?? false, fit: p?.fit ?? [], tempC: p?.targetTempC ?? null, notes: p?.notes ?? "" };
   if (!p) {
     // Neues Profil: das erste Sieb (nach id) — einen Siebtyp fragt die App nicht mehr ab.
     const basket = [...baskets].sort((a, b) => a.id - b.id)[0];
@@ -185,39 +190,47 @@ function freeTitle(title: string, taken: Set<string>): string {
 // Anzeige-Helfer
 // ---------------------------------------------------------------------------
 
-const KIND_LABEL: Record<PhaseKind, string> = { pressure: "Druck", flow: "Fluss", power: "Leistung", pause: "Pause", preinfusion: "Preinfusion" };
+// Beschriftungen als Funktionen — eine Konstante wuerde die Sprache beim Laden einfrieren.
+const kindLabel = (k: PhaseKind): string => ({
+  pressure: t("editor.kind.pressure"), flow: t("editor.kind.flow"), power: t("editor.kind.power"), pause: t("editor.kind.pause"), preinfusion: t("editor.kind.preinfusion"),
+})[k];
 const KIND_COLOR: Record<PhaseKind, string> = { pressure: C.seriesPressure, flow: C.seriesFlow, power: C.seriesPower, pause: C.mut, preinfusion: C.seriesPower };
 const UNIT: Record<PhaseKind, string> = { pressure: "bar", flow: "g/s", power: "%", pause: "", preinfusion: "" };
-const GENTLE: { key: PreinfusionGentleness; label: string }[] = [
-  { key: "gentle", label: "sanft" }, { key: "normal", label: "normal" }, { key: "brisk", label: "zügig" },
+const gentleOptions = (): { key: PreinfusionGentleness; label: string }[] => [
+  { key: "gentle", label: t("editor.gentle.gentle") }, { key: "normal", label: t("editor.gentle.normal") }, { key: "brisk", label: t("editor.gentle.brisk") },
 ];
-const EXIT_META: Record<ExitKind, { pre: string; unit: string; add: string; def: number }> = {
-  weight: { pre: "→", unit: "g", add: "Gewicht (g)", def: 20 },
-  pressureAbove: { pre: "P ≥", unit: "bar", add: "Druck ≥ (bar)", def: 4 },
-  pressureBelow: { pre: "P ≤", unit: "bar", add: "Druck ≤ (bar, Abfall)", def: 6 },
-  flowBelow: { pre: "F ≤", unit: "g/s", add: "Fluss ≤ (g/s)", def: 0.8 },
-  time: { pre: "nach", unit: "s", add: "Zeit (s)", def: 10 },
-  tempAbove: { pre: "≥", unit: "°C", add: "Temperatur ≥ (°C) · nur Skript", def: 90 },
-};
-const EXIT_ORDER: ExitKind[] = ["weight", "pressureAbove", "pressureBelow", "flowBelow", "time", "tempAbove"];
+const fillOptions = (): { key: PreinfusionFill; label: string }[] => [
+  { key: "normal", label: t("editor.fill.normal") }, { key: "fast", label: t("editor.fill.fast") },
+];
+const exitMeta = (k: ExitKind): { pre: string; unit: string; add: string; def: number } => ({
+  weight: { pre: "→", unit: "g", add: t("editor.exit.add.weight"), def: 20 },
+  pressureAbove: { pre: "P ≥", unit: "bar", add: t("editor.exit.add.pressureAbove"), def: 4 },
+  pressureBelow: { pre: "P ≤", unit: "bar", add: t("editor.exit.add.pressureBelow"), def: 6 },
+  flowBelow: { pre: "F ≤", unit: "g/s", add: t("editor.exit.add.flowBelow"), def: 0.8 },
+  flowAbove: { pre: "F ≥", unit: "g/s", add: t("editor.exit.add.flowAbove"), def: 2 },
+  time: { pre: t("editor.exit.after"), unit: "s", add: t("editor.exit.add.time"), def: 10 },
+  tempAbove: { pre: "≥", unit: "°C", add: t("editor.exit.add.tempAbove"), def: 90 },
+})[k];
+const EXIT_ORDER: ExitKind[] = ["weight", "pressureAbove", "pressureBelow", "flowBelow", "flowAbove", "time", "tempAbove"];
 
-const fmt = (v: number) => String(Math.round(v * 100) / 100).replace(".", ",");
+const fmt = (v: number) => dec(String(Math.round(v * 100) / 100));
 /** Getippte Werte bleiben, wie sie sind (auf 0,01) — nur −/+ geht in Schritten. */
 const r2 = (v: number) => Math.round(v * 100) / 100;
 /** Gruende kurz: je Art einmal, ohne Phasennummer. */
-const short = (rs: string[]) => [...new Set(rs.map((r) => r.replace(/ in Phase \d+$/, "")))].join(", ");
+const short = (rs: string[]) => [...new Set(rs.map((r) => r.replace(/ in (Phase|stage) \d+$/, "")))].join(", ");
 
 /** Skript-Phase ohne eigenen Pumpenbefehl: haelt das Ziel der Phase davor (z. B. „bis 3,8 bar, dann 3 s“). */
 const isHold = (p: Phase) => "pumpIndex" in p && (p as { pumpIndex: number | null }).pumpIndex === null && p.kind !== "pause";
 
 function autoLabel(p: Phase): string {
-  if (p.kind === "pause") return "Pause";
-  if (p.kind === "preinfusion") return `Preinfusion ${GENTLE.find((g) => g.key === (p.gentleness ?? "normal"))!.label}`;
-  return `${KIND_LABEL[p.kind]} ${p.target === null ? "—" : fmt(p.target)} ${UNIT[p.kind]}${isHold(p) ? " halten" : ""}`;
+  if (p.kind === "pause") return kindLabel("pause");
+  if (p.kind === "preinfusion") return t("editor.phase.autoPreinfusion", { gentle: gentleOptions().find((g) => g.key === (p.gentleness ?? "normal"))!.label });
+  const parts = { kind: kindLabel(p.kind), value: p.target === null ? "—" : fmt(p.target), unit: UNIT[p.kind] };
+  return isHold(p) ? t("editor.phase.autoLabelHold", parts) : t("editor.phase.autoLabel", parts);
 }
 
 function exitText(e: PhaseExit): string {
-  const m = EXIT_META[e.kind];
+  const m = exitMeta(e.kind);
   return `${m.pre} ${fmt(e.value)} ${m.unit}`.trim();
 }
 
@@ -251,7 +264,7 @@ function NumberStepper({ label, value, unit, step, min, max, nullable, color, on
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <span style={fieldLabel}>{label}</span>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <button type="button" aria-label={`${label} verringern`} onClick={() => bump(-1)} style={btn}>−</button>
+        <button type="button" aria-label={t("editor.stepper.decrease", { label })} onClick={() => bump(-1)} style={btn}>−</button>
         <input
           value={txt}
           inputMode="decimal"
@@ -266,7 +279,7 @@ function NumberStepper({ label, value, unit, step, min, max, nullable, color, on
           }}
         />
         <span style={{ fontSize: 11, color: C.mut, minWidth: 22 }}>{unit}</span>
-        <button type="button" aria-label={`${label} erhöhen`} onClick={() => bump(1)} style={btn}>+</button>
+        <button type="button" aria-label={t("editor.stepper.increase", { label })} onClick={() => bump(1)} style={btn}>+</button>
       </div>
     </div>
   );
@@ -281,7 +294,7 @@ function FieldHelp({ lines }: { lines: string[] }) {
       content={<div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12, maxWidth: 340 }}>{lines.map((l) => <span key={l}>{l}</span>)}</div>}
       style={{ display: "inline-flex", color: C.mut, cursor: "help" }}
     >
-      <HelpCircle size={13} aria-label="Hilfe" />
+      <HelpCircle size={13} aria-label={t("editor.help.aria")} />
     </HoverTip>
   );
 }
@@ -358,10 +371,13 @@ export interface ProfileEditorViewProps {
   onOpenCoffee?: (coffeeId: number) => void;
   /** Handy: der Kopf in Zeilen statt einer — sonst ist „Speichern“ abgeschnitten. */
   mobile?: boolean;
+  /** In dieser Variante oeffnen (Klick auf das Profil im Bezugs-Detail). */
+  initialVariantId?: number | null;
 }
 
 export function ProfileEditorView(props: ProfileEditorViewProps) {
   const { profile, scriptsSyncing } = props;
+  const { t } = useTranslation();
   const { baskets, loaded } = useBaskets();
   // Skripte, die an der Maschine fehlen: ihr gespeicherter Stand (verwaist, aber noch in der DB).
   const [orphans, setOrphans] = useState<XeniaScript[] | null>(null);
@@ -377,12 +393,13 @@ export function ProfileEditorView(props: ProfileEditorViewProps) {
     if (initial === null && !scriptsSyncing && loaded && orphans !== null) setInitial(initDraft(profile, props.scripts, baskets, orphans));
   }, [scriptsSyncing, loaded, orphans, initial, profile, props.scripts, baskets]);
   if (initial === null) {
-    return <div style={{ padding: 24, color: C.mut, fontSize: 13 }}>Skripte werden aktualisiert …</div>;
+    return <div style={{ padding: 24, color: C.mut, fontSize: 13 }}>{t("editor.loading")}</div>;
   }
   return <EditorBody {...props} initial={initial} baskets={baskets} />;
 }
 
-function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, onClose, onOpenHistory, onOpenCoffee, mobile = false, initial, baskets }: ProfileEditorViewProps & { initial: Draft; baskets: Basket[] }) {
+function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, onClose, onOpenHistory, onOpenCoffee, mobile = false, initialVariantId = null, initial, baskets }: ProfileEditorViewProps & { initial: Draft; baskets: Basket[] }) {
+  const { t } = useTranslation();
   const [history, setHistory] = useState<Draft[]>([initial]);
   const [pos, setPos] = useState(0);
   const draft = history[pos]!;
@@ -396,7 +413,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
   const undo = () => { if (pos > 0) setPos(pos - 1); };
   const redo = () => { if (pos < history.length - 1) setPos(pos + 1); };
 
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(() => Math.max(0, initial.variants.findIndex((v) => v.id !== null && v.id === initialVariantId)));
   const [sel, setSel] = useState(0);
   const [tab, setTab] = useState<Tab>("phasen");
   const [preview, setPreview] = useState<ParsedCmd[] | null>(null);
@@ -431,6 +448,14 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
   const yieldG = av.yieldG;
   // App-Kurve: dieselbe Darstellung wie ein Skript (Schnitt 2d).
   const stepsTimeline = useMemo(() => stepsToTimeline(previewSteps ?? cur.steps ?? [], yieldG), [previewSteps, cur.steps, yieldG]);
+  // Eine Zeitachse fuer alle Varianten (Flavio 22.10.): „wie Einzel“ mit anderem
+  // Yield hat ein anderes geschaetztes Ende — ohne gemeinsames Ende sprang die Kurve.
+  const sharedEndMs = useMemo(() => Math.max(0, ...draft.variants.map((v, i) => {
+    const c = draft.variants[ownerOf(draft, i)]!.curve;
+    return c.cmds !== null
+      ? scriptToTimeline({ commands: c.cmds, unknownCmds: [] }).totalMs
+      : stepsToTimeline(c.steps ?? [], v.yieldG).totalMs;
+  })), [draft]);
   // Fluss-Achse nach dem festgehaltenen Stand — beim Ziehen steht sie still.
   const flowAxisMax = useMemo(() => {
     const m = Math.max(0, ...(cur.steps ?? []).map((st) => (st.kind === "flow" ? st.targetFlowGs : 0)));
@@ -454,7 +479,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
     const c = curveOf(d, ai);
     if (!c.cmds) return d;
     const r = scriptToSteps(c.cmds);
-    if (!r.ok) return `Das geht nur in der App — dieses Skript enthält aber, was nur das Skript kann: ${short(r.reasons)}.`;
+    if (!r.ok) return t("editor.notice.appOnly", { reasons: short(r.reasons) });
     return withCurve(d, ai, { cmds: null, steps: r.value.map((st, k) => (c.names[k] ? { ...st, name: c.names[k]! } : st)) });
   };
 
@@ -470,9 +495,9 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
       return;
     }
     if (isScript && cur.cmds) {
-      const exitsOk = next.exits.length <= 1 && next.exits.every((e) => e.kind !== "pressureBelow" && e.kind !== "flowBelow");
+      const exitsOk = next.exits.length <= 1 && next.exits.every((e) => e.kind !== "pressureBelow" && e.kind !== "flowBelow" && e.kind !== "flowAbove");
       const scriptable = (next.kind === "pressure" || next.kind === "power" || next.kind === "pause")
-        && next.maxPressureBar === null && next.maxFlowGs === null && exitsOk;
+        && next.maxPressureBar === null && next.maxFlowGs === null && !next.adoptPressure && exitsOk;
       if (scriptable) {
         let c = cur.cmds;
         if (patch.kind && patch.kind !== p.kind) c = setScriptPhaseKind(c, i, patch.kind as "pressure" | "power" | "pause");
@@ -492,7 +517,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
       commit(withCurve(conv, ai, { steps: ph2.map(phaseToStep) }));
       return;
     }
-    if (patch.exits?.some((e) => e.kind === "tempAbove")) { setNotice("„Warten bis °C“ gibt es nur im Skript."); return; }
+    if (patch.exits?.some((e) => e.kind === "tempAbove")) { setNotice(t("editor.notice.tempOnlyScript")); return; }
     const list = projectSteps(cur.steps ?? []);
     list[i] = next;
     setSteps(list.map(phaseToStep));
@@ -500,12 +525,13 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
 
   const setKind = (k: PhaseKind) => {
     if (!ph || k === ph.kind) return;
-    const patch: Partial<Phase> = { kind: k };
+    // „vom Puck“ gehoert zur Art (Fluss bzw. Druck) — beim Wechsel faellt es weg.
+    const patch: Partial<Phase> = { kind: k, adoptFlow: undefined, adoptPressure: undefined };
     if (k === "pressure") patch.target = 9;
     if (k === "flow") patch.target = 1.4;
     if (k === "power") patch.target = 60;
     if (k === "pause" || k === "preinfusion") patch.target = null;
-    if (k === "preinfusion") { patch.gentleness = "normal"; if (ph.exits.length === 0) patch.exits = [{ kind: "time", value: 25 }, { kind: "pressureAbove", value: 4 }]; }
+    if (k === "preinfusion") { patch.gentleness = "normal"; patch.fill = undefined; if (ph.exits.length === 0) patch.exits = [{ kind: "time", value: 25 }, { kind: "pressureAbove", value: 4 }]; }
     if (k !== "pressure" && k !== "power" && k !== "flow") patch.rampS = 0;
     editPhase(s, patch);
   };
@@ -600,16 +626,16 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
 
   /** Varianten mit eigener Kurve. */
   const owners = draft.variants.flatMap((v, i) => (v.sameAs === null ? [i] : []));
-  const vname = (i: number) => `„${draft.variants[i]!.name.trim() || `Variante ${i + 1}`}“`;
+  const vname = (i: number) => t("editor.quote", { text: draft.variants[i]!.name.trim() || t("editor.variantFallback", { n: i + 1 }) });
   const la: Laufart = proj ? laufart(proj.phases, proj.markers) : laufart(phases);
   const problems: string[] = [];
-  if (!draft.name.trim()) problems.push("Name fehlt");
-  if (draft.tempC !== null && (draft.tempC < 70 || draft.tempC > 110)) problems.push("Temperatur 70–110 °C");
+  if (!draft.name.trim()) problems.push(t("editor.problem.nameMissing"));
+  if (draft.tempC !== null && (draft.tempC < 70 || draft.tempC > 110)) problems.push(t("editor.problem.temperature"));
   const seen = new Set<string>();
   draft.variants.forEach((v, i) => {
     const n = v.name.trim().toLowerCase();
-    if (!n) problems.push(`Variante ${i + 1}: Name fehlt`);
-    else if (seen.has(n)) problems.push(`Variante ${vname(i)} gibt es zweimal`);
+    if (!n) problems.push(t("editor.problem.variantNameMissing", { n: i + 1 }));
+    else if (seen.has(n)) problems.push(t("editor.problem.variantTwice", { name: vname(i) }));
     seen.add(n);
   });
   for (const i of owners) {
@@ -617,27 +643,31 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
     const name = vname(i);
     if (v.cmds) {
       for (const e of validateScript({ commands: v.cmds, unknownCmds: [] }).errors) problems.push(`${name}: ${e.message}`);
-      if (v.title !== null && !scriptNameOk(v.title)) problems.push(`${name}: Skriptname nur mit A–Z, Ziffern, - _ # und Leerzeichen (max. 40, ohne Umlaute)`);
+      if (v.title !== null && !scriptNameOk(v.title)) problems.push(t("editor.problem.scriptName", { name }));
       const pr = projectScript(v.cmds);
       const l = laufart(pr.phases, pr.markers);
-      if (l.engine === "conflict") problems.push(`${name}: geht so nicht — ${[...l.app, ...l.script].join(", ")}`);
+      if (l.engine === "conflict") problems.push(t("editor.problem.conflict", { name, reasons: [...l.app, ...l.script].join(", ") }));
     } else {
       const st = v.steps ?? [];
-      if (st.length === 0) problems.push(`${name}: keine Phase`);
+      if (st.length === 0) problems.push(t("editor.problem.noPhase", { name }));
       projectSteps(st).forEach((p, k) => {
-        if (k < st.length - 1 && p.exits.length === 0) problems.push(`${name}: Phase ${k + 1} braucht einen Ausstieg`);
-        if (p.kind === "preinfusion" && k > 0) problems.push(`${name}: Preinfusion geht nur als erste Phase`);
+        if (k < st.length - 1 && p.exits.length === 0) problems.push(t("editor.problem.phaseNeedsExit", { name, n: k + 1 }));
+        if (p.kind === "preinfusion" && k > 0) problems.push(t("editor.problem.preinfusionFirst", { name }));
       });
       const chk = validateBrewSteps(st);
       if (!chk.ok && problems.length === 0) problems.push(`${name}: ${chk.error}`);
     }
   }
   // Wartung schaltet Ventile — das kann nur das Skript.
-  if (maintenance && owners.some((i) => !draft.variants[i]!.curve.cmds)) problems.push("Wartung geht nur mit Skript-Kurve — im Reiter Befehle ein Skript wählen");
+  if (maintenance && owners.some((i) => !draft.variants[i]!.curve.cmds)) problems.push(t("editor.problem.maintenanceScript"));
   else if (!maintenance) {
     draft.variants.forEach((v, i) => {
-      // Jede App-Variante wird nach Gewicht gestoppt — ohne Yield kein Stopp.
-      if (!curveOf(draft, i).cmds && !(v.yieldG !== null && v.yieldG > 0)) problems.push(`${vname(i)}: Yield fehlt`);
+      // App-Varianten stoppt die Waage beim Yield — ohne Yield beendet die letzte
+      // Phase den Bezug, dann braucht sie einen Ausstieg.
+      const c = curveOf(draft, i);
+      if (!c.cmds && !(v.yieldG !== null && v.yieldG > 0) && !endsWithoutYield(c.steps)) {
+        problems.push(t("editor.problem.yieldMissing", { name: vname(i) }));
+      }
     });
   }
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
@@ -702,7 +732,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
     setSaveErr(null);
     const plans = planSave();
     const blocked = plans.find((p) => p.case.kind === "blocked");
-    if (blocked && blocked.case.kind === "blocked") { setNotice(`„${blocked.name}“: ${blocked.case.reasons.join(" · ")}`); return; }
+    if (blocked && blocked.case.kind === "blocked") { setNotice(t("editor.notice.blocked", { name: blocked.name, reasons: blocked.case.reasons.join(" · ") })); return; }
     // Nutzen andere das Skript, ist „nur hier“ vorgewählt — für alle überschreiben nur bewusst.
     const choice: Record<number, Choice> = Object.fromEntries(plans.map((p) => [
       p.key, p.case.kind === "overwrite" ? (p.case.otherUsers.length > 0 ? "new" : "overwrite") : "keep",
@@ -766,6 +796,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
         kind: draft.kind,
         isFavorite: draft.fav,
         isTrial: draft.trial,
+        fit: draft.fit,
         targetTempC: draft.tempC,
         notes: draft.notes.trim() ? draft.notes.trim() : null,
         // Die alten Kurven-Felder leitet das Backend aus den Varianten ab.
@@ -789,19 +820,19 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
   const scriptId = cur.scriptId;
   const check = useMemo(() => validateScript({ commands: cmds ?? [], unknownCmds: [] }), [cmds]);
   const engineLine = (() => {
-    if (la.engine === "conflict") return { text: `Geht so nicht: ${short(la.app)} gibt es nur in der App, ${short(la.script)} nur im Skript.`, warn: true };
-    if (cur.missing !== null) return { text: `Skript #${cur.missing} fehlt an der Maschine — Speichern legt es aus dem gespeicherten Stand neu an.`, warn: true };
+    if (la.engine === "conflict") return { text: t("editor.engine.conflict", { app: short(la.app), script: short(la.script) }), warn: true };
+    if (cur.missing !== null) return { text: t("editor.engine.missing", { id: cur.missing }), warn: true };
     if (isScript) {
-      return { text: scriptId !== null ? `Läuft als Skript #${scriptId} auf der Maschine.` : "Läuft als Skript — wird beim Speichern an der Maschine angelegt.", warn: false };
+      return { text: scriptId !== null ? t("editor.engine.scriptExisting", { id: scriptId }) : t("editor.engine.scriptNew"), warn: false };
     }
     if (activePlan.engine === "script") {
-      return { text: cur.start.cmds !== null ? "Passt wieder ins Skript — wird beim Speichern als Skript gespeichert." : "Läuft in der App — passt jetzt ins Skript und wird beim Speichern als Skript angelegt.", warn: false };
+      return { text: cur.start.cmds !== null ? t("editor.engine.backToScript") : t("editor.engine.appToScript"), warn: false };
     }
     // Der Grund steht nur da, wenn die Kurve aus einem Skript kommt.
     const why = cur.start.cmds !== null ? short(activePlan.laufart.app) : "";
-    return { text: why ? `Läuft künftig in der App, wegen: ${why}.` : "Läuft in der App.", warn: false };
+    return { text: why ? t("editor.engine.appBecause", { why }) : t("editor.engine.app"), warn: false };
   })();
-  const engineChip = isScript ? "Skript" : "App";
+  const engineChip = isScript ? t("editor.engine.chipScript") : t("editor.engine.chipApp");
 
   /** Preinfusion vor einer Flussphase endet, sobald der Fluss 90 % davon erreicht (pump-curve.ts). */
   const arrivalGs = (i: number): number | null => {
@@ -820,7 +851,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
   };
   const segSub = (p: Phase, i: number) => {
     const parts: string[] = [];
-    if (i === lastIdx && yieldG !== null) parts.push(`Yield ${fmt(yieldG)} g`);
+    if (i === lastIdx && yieldG !== null) parts.push(t("editor.phase.yieldSub", { v: fmt(yieldG) }));
     const arrival = arrivalGs(i);
     if (arrival !== null) parts.push(`F ≥ ${fmt(arrival)} g/s`);
     p.exits.forEach((e) => {
@@ -828,12 +859,12 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
       if (!(i === lastIdx && e.kind === "weight" && e.value === yieldG)) parts.push(exitText(e));
     });
     // Ist die Zeit der einzige Ausstieg, ist sie die Dauer der Phase: „für 3 s“. Mit anderen Ausstiegen „oder nach 25 s“.
-    if (parts.length === 1 && p.exits.length === 1 && p.exits[0]!.kind === "time") return `für ${fmt(p.exits[0]!.value)} s`;
-    return parts.length ? parts.join(" oder ") : i < lastIdx ? "Ausstieg fehlt" : "";
+    if (parts.length === 1 && p.exits.length === 1 && p.exits[0]!.kind === "time") return t("editor.phase.forSeconds", { v: fmt(p.exits[0]!.value) });
+    return parts.length ? parts.join(` ${t("editor.exit.or")} `) : i < lastIdx ? t("editor.phase.exitMissing") : "";
   };
 
   const kindOptions = (["pressure", "flow", "power", "pause", ...(s === 0 ? ["preinfusion"] : [])] as PhaseKind[])
-    .map((k) => ({ key: k, label: KIND_LABEL[k] }));
+    .map((k) => ({ key: k, label: kindLabel(k) }));
 
   const present = new Set(ph?.exits.map((e) => e.kind) ?? []);
   const addable = EXIT_ORDER.filter((k) => !present.has(k) && (isScript || k !== "tempAbove"));
@@ -842,7 +873,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
     const on = ai === i;
     const owner = v.sameAs !== null ? draft.variants.find((x) => x.key === v.sameAs) : undefined;
     // Wartung hat keinen Yield — dann steht nur „wie …“ darunter.
-    const sub = [maintenance ? null : v.yieldG !== null ? `→ ${fmt(v.yieldG)} g` : "kein Yield", owner ? `wie ${owner.name.trim()}` : null]
+    const sub = [maintenance ? null : v.yieldG !== null ? `→ ${fmt(v.yieldG)} g` : endsWithoutYield(curveOf(draft, draft.variants.indexOf(v)).steps) ? t("editor.variantTab.endsWithLast") : t("editor.variantTab.noYield"), owner ? t("editor.sameAs", { name: owner.name.trim() }) : null]
       .filter(Boolean).join(" · ");
     return (
       <button
@@ -890,7 +921,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
   const loose = scripts.filter((x) =>
     !profiles.some((p) => (p.variants ?? []).some((v) => v.scriptId === x.id)) && !owners.some((i) => draft.variants[i]!.curve.scriptId === x.id));
   const deleteLoose = async (id: number, title: string) => {
-    if (!window.confirm(`Skript #${id} „${title}“ an der Maschine löschen? Das lässt sich nicht rückgängig machen.`)) return;
+    if (!window.confirm(t("editor.commands.deleteLooseConfirm", { id, title }))) return;
     setBusy(true);
     setSaveErr(null);
     try { await scriptActions.deleteScript(id); } catch (e) { setSaveErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
@@ -900,7 +931,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
   const headRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, height: 40, flexShrink: 0 };
   const leave = () => (dirty ? setDialog({ kind: "discard" }) : onClose());
   const backBtn = (
-    <button onClick={leave} aria-label="Zurück" style={iconBtn(true)}>
+    <button onClick={leave} aria-label={t("editor.common.back")} style={iconBtn(true)}>
       <ChevronLeft size={18} />
     </button>
   );
@@ -908,23 +939,23 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
     <input
       value={draft.name}
       maxLength={80}
-      placeholder="Name des Profils"
-      aria-label="Name des Profils"
+      placeholder={t("editor.header.profileName")}
+      aria-label={t("editor.header.profileName")}
       onChange={(e) => commit({ ...draft, name: e.target.value })}
       style={{ flex: mobile ? "1 1 auto" : "0 1 340px", minWidth: mobile ? 0 : 160, height: 36, boxSizing: "border-box", padding: "0 10px", borderRadius: 9, border: `1px solid ${C.bdrL}`, background: C.bg, color: C.txt, fontSize: 16, fontWeight: 700, fontFamily: "inherit", outline: "none" }}
     />
   );
   const favBtn = (
-    <button aria-label="Favorit" aria-pressed={draft.fav} onClick={() => commit({ ...draft, fav: !draft.fav })} style={iconBtn(true)}>
+    <button aria-label={t("editor.header.favourite")} aria-pressed={draft.fav} onClick={() => commit({ ...draft, fav: !draft.fav })} style={iconBtn(true)}>
       <Star size={16} color={C.acc} fill={draft.fav ? C.acc : "none"} />
     </button>
   );
   // Versuch: nur zum Ausprobieren — angeschaltet gelb wie der Kolben in der Liste.
   const trialBtn = (
     <button
-      aria-label="Versuch"
+      aria-label={t("editor.header.trial")}
       aria-pressed={draft.trial}
-      title={draft.trial ? "Versuch beendet" : "Als Versuch markieren"}
+      title={draft.trial ? t("editor.header.trialEnd") : t("editor.header.trialMark")}
       onClick={() => commit({ ...draft, trial: !draft.trial })}
       style={{ ...iconBtn(true), ...(draft.trial ? { color: C.org, background: C.orgD, border: `1px solid ${alpha(C.org, 0.45)}` } : {}) }}
     >
@@ -937,30 +968,32 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
       {engineChip}
     </span>
   );
-  const undoBtn = <button onClick={undo} disabled={pos === 0} aria-label="Rückgängig" title="Rückgängig (Strg+Z)" style={iconBtn(pos > 0)}><Undo2 size={15} /></button>;
-  const redoBtn = <button onClick={redo} disabled={pos >= history.length - 1} aria-label="Wiederholen" style={iconBtn(pos < history.length - 1)}><Redo2 size={15} /></button>;
-  const cancelBtn = <button onClick={leave} style={textBtn(false)}>Abbrechen</button>;
-  const saveBtn = <button onClick={startSave} disabled={!canSave} style={textBtn(true, canSave)}>Speichern</button>;
+  const undoBtn = <button onClick={undo} disabled={pos === 0} aria-label={t("editor.header.undo")} title={t("editor.header.undoTitle")} style={iconBtn(pos > 0)}><Undo2 size={15} /></button>;
+  const redoBtn = <button onClick={redo} disabled={pos >= history.length - 1} aria-label={t("editor.header.redo")} style={iconBtn(pos < history.length - 1)}><Redo2 size={15} /></button>;
+  const cancelBtn = <button onClick={leave} style={textBtn(false)}>{t("editor.common.cancel")}</button>;
+  const saveBtn = <button onClick={startSave} disabled={!canSave} style={textBtn(true, canSave)}>{t("editor.common.save")}</button>;
   const kindPicker = (
     <Segmented
-      label="Art des Profils"
-      options={[{ key: "brew", label: "Bezug" }, { key: "maintenance", label: "Wartung" }, { key: "test", label: "Messlauf" }]}
+      label={t("editor.header.kindLabel")}
+      options={[{ key: "brew", label: t("editor.header.kind.brew") }, { key: "maintenance", label: t("editor.header.kind.maintenance") }, { key: "test", label: t("editor.header.kind.test") }]}
       value={draft.kind}
       onPick={setProfileKind}
     />
   );
   const variantTabs = (!maintenance || draft.variants.length > 1) && (
-    <div role="tablist" aria-label="Varianten" style={{ display: "flex", gap: 8, minWidth: 0, overflowX: "auto" }}>
+    <div role="tablist" aria-label={t("editor.header.variants")} style={mobile ? { display: "contents" } : { display: "flex", gap: 8, minWidth: 0, overflowX: "auto" }}>
       {draft.variants.map((v, i) => variantTab(v, i))}
     </div>
   );
   const addVariantBtn = !maintenance && draft.variants.length < MAX_VARIANTS && (
-    <button onClick={addVariant} title="Neue Variante als Kopie der gewählten" style={{ ...textBtn(false), borderStyle: "dashed" }}><Plus size={13} /> Variante</button>
+    <button onClick={addVariant} title={t("editor.header.addVariantTitle")} style={{ ...textBtn(false), borderStyle: "dashed" }}><Plus size={13} /> {t("editor.header.addVariant")}</button>
   );
   const yieldField = !maintenance && <YieldField value={yieldG} onChange={setYield} />;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, height: "calc(100dvh - 32px)", minHeight: 520 }}>
+    // Tablet: ein festes Fenster, nur der Reiter-Inhalt scrollt. Handy: eine normale
+    // Seite — quer blieben dem Reiter-Inhalt sonst 34 px (iPhone, 402 px hoch).
+    <div style={mobile ? { display: "flex", flexDirection: "column", gap: 6 } : { display: "flex", flexDirection: "column", gap: 6, height: "calc(100dvh - 32px)", minHeight: 520 }}>
       {/* Kopf — auf dem Handy in Zeilen: Name und Speichern, dann Temperatur und
           Rueckgaengig, dann Art und Yield, dann die Varianten. „Abbrechen“ macht
           dort der Zurueck-Pfeil (derselbe Weg). */}
@@ -982,7 +1015,8 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
         <>
           {/* Drei Arten passen mit dem Yield nicht in eine Handy-Zeile — dann bricht der Yield um. */}
           <div style={{ ...headRow, height: "auto", minHeight: 40, flexWrap: "wrap", rowGap: 6 }}>{kindPicker}<span style={{ flex: 1 }} />{yieldField}</div>
-          {(variantTabs || addVariantBtn) && <div style={headRow}>{variantTabs}{addVariantBtn}</div>}
+          {/* Reiter brechen um statt seitlich zu schieben — sonst lag die dritte Variante unsichtbar rechts. */}
+          {(variantTabs || addVariantBtn) && <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>{variantTabs}{addVariantBtn}</div>}
         </>
       ) : (
         <div style={headRow}>
@@ -1008,6 +1042,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
             onPreview={setPreview}
             onCommit={(c) => { setPreview(null); setCmds(c); }}
             height={170}
+            xEndMs={sharedEndMs}
           />
         ) : (
           <CurveEditor
@@ -1021,9 +1056,10 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
             height={170}
             flowMax={flowAxisMax}
             approxEnd
+            xEndMs={sharedEndMs}
           />
         )}
-        <div role="tablist" aria-label="Phasen" style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        <div role="tablist" aria-label={t("editor.phase.tablist")} style={{ display: "flex", gap: 6, marginTop: 4 }}>
           {phases.map((p, i) => {
             const on = i === s;
             const sub = segSub(p, i);
@@ -1039,12 +1075,15 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                   border: `1px solid ${on ? alpha(C.acc, 0.55) : C.bdrL}`, background: on ? alpha(C.acc, 0.14) : C.sunken, textAlign: "left", fontFamily: "inherit",
                 }}
               >
-                <span style={{ ...MONO, ...cut, fontSize: 11.5, fontWeight: 600, color: KIND_COLOR[p.kind] }}>{segTitle(p, i)}</span>
-                <span style={{ ...MONO, ...cut, fontSize: 10.5, color: sub === "Ausstieg fehlt" ? C.red : C.mut }}>{sub}</span>
+                <span style={{ ...MONO, ...cut, fontSize: 11.5, fontWeight: 600, color: KIND_COLOR[p.kind] }}>
+                  {p.tone && <Bell size={10} style={{ marginRight: 4, verticalAlign: -1 }} />}
+                  {segTitle(p, i)}
+                </span>
+                <span style={{ ...MONO, ...cut, fontSize: 10.5, color: sub === t("editor.phase.exitMissing") ? C.red : C.mut }}>{sub}</span>
               </button>
             );
           })}
-          <button onClick={addPhase} aria-label="Phase hinzufügen" style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: `1px dashed ${C.bdr3}`, background: "transparent", color: C.mut, fontSize: 18, cursor: "pointer" }}>+</button>
+          <button onClick={addPhase} aria-label={t("editor.phase.add")} style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: `1px dashed ${C.bdr3}`, background: "transparent", color: C.mut, fontSize: 18, cursor: "pointer" }}>+</button>
         </div>
       </div>
 
@@ -1054,8 +1093,8 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
       </div>
 
       {/* Reiter */}
-      <div role="tablist" aria-label="Bereich" style={{ display: "flex", gap: 4, height: 34, flexShrink: 0, borderBottom: `1px solid ${C.bdr}`, ...(mobile ? { overflowX: "auto" as const } : {}) }}>
-        {([["phasen", "Phasen"], ["befehle", "Befehle"], ["variante", "Variante"], ...(profile && !maintenance ? [["liefmit", "Lief mit"]] : []), ["notiz", "Notiz"]] as [Tab, string][]).map(([k, l]) => (
+      <div role="tablist" aria-label={t("editor.tabs.aria")} style={{ display: "flex", gap: 4, height: 34, flexShrink: 0, borderBottom: `1px solid ${C.bdr}`, ...(mobile ? { overflowX: "auto" as const } : {}) }}>
+        {([["phasen", t("editor.tabs.phases")], ["befehle", t("editor.tabs.commands")], ["variante", t("editor.tabs.variant")], ...(profile && !maintenance ? [["liefmit", t("editor.tabs.ranWith")]] : []), ["notiz", t("editor.tabs.note")]] as [Tab, string][]).map(([k, l]) => (
           <button
             key={k}
             role="tab"
@@ -1068,7 +1107,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
         ))}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+      <div style={mobile ? undefined : { flex: 1, minHeight: 0, overflowY: "auto" }}>
         {tab === "phasen" && ph && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 36, flexWrap: "wrap" }}>
@@ -1077,28 +1116,58 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                   value={ph.name ?? ""}
                   placeholder={autoLabel(ph)}
                   maxLength={40}
-                  aria-label="Name der Phase"
+                  aria-label={t("editor.phase.name")}
                   onChange={(e) => editPhase(s, { name: e.target.value.trim() ? e.target.value : null })}
                   style={{ width: 190, height: 34, boxSizing: "border-box", padding: "0 10px", borderRadius: 8, border: `1px solid ${C.bdrL}`, background: C.bg, color: C.txt, fontSize: 14, fontWeight: 600, fontFamily: "inherit", outline: "none" }}
                 />
-                <span style={{ fontSize: 10, color: C.mut, border: `1px solid ${C.bdr2}`, borderRadius: 5, padding: "1px 5px" }}>{ph.name ? "✎" : "auto"}</span>
+                <span style={{ fontSize: 10, color: C.mut, border: `1px solid ${C.bdr2}`, borderRadius: 5, padding: "1px 5px" }}>{ph.name ? "✎" : t("editor.phase.auto")}</span>
               </>
               {/* Auf schmalen Handys passt die Auswahl nicht: dann eigene Zeile, notfalls seitlich wischen. */}
               <div style={{ maxWidth: "100%", minWidth: 0, overflowX: "auto" }}>
-                <Segmented label="Art der Phase" options={kindOptions} value={ph.kind} onPick={setKind} />
+                <Segmented label={t("editor.phase.kindLabel")} options={kindOptions} value={ph.kind} onPick={setKind} />
               </div>
               <span style={{ flex: 1 }} />
-              <button onClick={() => movePhase(-1)} disabled={s === 0} aria-label="Phase nach vorne" style={iconBtn(s > 0)}><ChevronLeft size={15} /></button>
-              <button onClick={() => movePhase(1)} disabled={s >= lastIdx} aria-label="Phase nach hinten" style={iconBtn(s < lastIdx)}><ChevronRight size={15} /></button>
-              <button onClick={removePhase} disabled={phases.length <= 1} aria-label="Phase löschen" style={iconBtn(phases.length > 1)}><Trash2 size={14} /></button>
+              {/* Nur in der App: im Skript piept die Maschine selbst (Befehl „Signalton“). */}
+              {!isScript && activePlan.engine === "app" && (
+                <button
+                  onClick={() => editPhase(s, { tone: ph.tone ? undefined : true })}
+                  aria-pressed={!!ph.tone}
+                  aria-label={t("editor.phase.tone")}
+                  title={t("editor.phase.tone")}
+                  style={ph.tone ? { ...iconBtn(true), color: C.acc, borderColor: alpha(C.acc, 0.55), background: alpha(C.acc, 0.14) } : iconBtn(true)}
+                >
+                  <Bell size={15} fill={ph.tone ? C.acc : "none"} />
+                </button>
+              )}
+              <button onClick={() => movePhase(-1)} disabled={s === 0} aria-label={t("editor.phase.moveEarlier")} style={iconBtn(s > 0)}><ChevronLeft size={15} /></button>
+              <button onClick={() => movePhase(1)} disabled={s >= lastIdx} aria-label={t("editor.phase.moveLater")} style={iconBtn(s < lastIdx)}><ChevronRight size={15} /></button>
+              <button onClick={removePhase} disabled={phases.length <= 1} aria-label={t("editor.phase.remove")} style={iconBtn(phases.length > 1)}><Trash2 size={14} /></button>
             </div>
 
             <div style={{ display: "flex", alignItems: "flex-end", gap: 18, flexWrap: "wrap" }}>
               {ph.kind === "pressure" && (
                 <>
-                  <NumberStepper label="Ziel" value={ph.target} unit="bar" step={0.1} min={0.1} max={12} color={C.seriesPressure} onChange={(v) => editPhase(s, { target: v ?? 9 })} />
-                  <NumberStepper label="Rampe über" value={ph.rampS} unit="s" step={0.5} min={0} max={120} onChange={(v) => editPhase(s, { rampS: v ?? 0 })} />
-                  <NumberStepper label="max. Fluss" value={ph.maxFlowGs} unit="g/s" step={0.1} min={0.1} max={8} nullable onChange={(v) => editPhase(s, { maxFlowGs: v })} />
+                  {/* Decent HOLD-P: das Ziel beim Eintritt vom Puck uebernehmen — braucht eine Phase davor. */}
+                  {s > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                      <span style={labelWithHelp}>{t("editor.phase.pressureTarget")} <FieldHelp lines={[
+                        t("editor.help.pressureTarget.fixed"),
+                        t("editor.help.pressureTarget.adopt"),
+                        t("editor.help.pressureTarget.forCurve"),
+                        t("editor.help.pressureTarget.fallback"),
+                      ]} /></span>
+                      <Segmented
+                        label={t("editor.phase.pressureTarget")}
+                        options={[{ key: "fix", label: t("editor.phase.fixed") }, { key: "adopt", label: t("editor.phase.adopt") }]}
+                        value={ph.adoptPressure ? "adopt" : "fix"}
+                        color={C.seriesPressure}
+                        onPick={(k) => editPhase(s, { adoptPressure: k === "adopt" ? true : undefined })}
+                      />
+                    </div>
+                  )}
+                  <NumberStepper label={ph.adoptPressure && s > 0 ? t("editor.phase.forCurve") : t("editor.phase.target")} value={ph.target} unit="bar" step={0.1} min={0.1} max={12} color={C.seriesPressure} onChange={(v) => editPhase(s, { target: v ?? 9 })} />
+                  <NumberStepper label={t("editor.phase.rampOver")} value={ph.rampS} unit="s" step={0.5} min={0} max={120} onChange={(v) => editPhase(s, { rampS: v ?? 0 })} />
+                  <NumberStepper label={t("editor.phase.maxFlow")} value={ph.maxFlowGs} unit="g/s" step={0.1} min={0.1} max={8} nullable onChange={(v) => editPhase(s, { maxFlowGs: v })} />
                 </>
               )}
               {ph.kind === "flow" && (
@@ -1106,58 +1175,67 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                   {/* Gagne: das Ziel beim Eintritt vom Puck uebernehmen — braucht eine Phase davor. */}
                   {s > 0 && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                      <span style={labelWithHelp}>Flussziel <FieldHelp lines={[
-                        "fest: hält den eingestellten Fluss",
-                        "vom Puck: hält den Fluss, der beim Eintritt fließt",
-                        "für die Kurve: nur Vorschau und „Ende ≈“",
-                        "fließt beim Eintritt noch nichts, gilt dieser Wert",
+                      <span style={labelWithHelp}>{t("editor.phase.flowTarget")} <FieldHelp lines={[
+                        t("editor.help.flowTarget.fixed"),
+                        t("editor.help.flowTarget.adopt"),
+                        t("editor.help.flowTarget.forCurve"),
+                        t("editor.help.flowTarget.fallback"),
                       ]} /></span>
                       <Segmented
-                        label="Flussziel"
-                        options={[{ key: "fix", label: "fest" }, { key: "adopt", label: "vom Puck" }]}
+                        label={t("editor.phase.flowTarget")}
+                        options={[{ key: "fix", label: t("editor.phase.fixed") }, { key: "adopt", label: t("editor.phase.adopt") }]}
                         value={ph.adoptFlow ? "adopt" : "fix"}
                         color={C.seriesFlow}
                         onPick={(k) => editPhase(s, { adoptFlow: k === "adopt" ? true : undefined })}
                       />
                     </div>
                   )}
-                  <NumberStepper label={ph.adoptFlow && s > 0 ? "für die Kurve" : "Ziel"} value={ph.target} unit="g/s" step={0.1} min={0.1} max={8} color={C.seriesFlow} onChange={(v) => editPhase(s, { target: v ?? 1.4 })} />
-                  <NumberStepper label="Rampe über" value={ph.rampS} unit="s" step={0.5} min={0} max={120} onChange={(v) => editPhase(s, { rampS: v ?? 0 })} />
-                  <NumberStepper label="max. Druck" value={ph.maxPressureBar} unit="bar" step={0.5} min={0.5} max={12} nullable onChange={(v) => editPhase(s, { maxPressureBar: v })} />
+                  <NumberStepper label={ph.adoptFlow && s > 0 ? t("editor.phase.forCurve") : t("editor.phase.target")} value={ph.target} unit="g/s" step={0.1} min={0.1} max={8} color={C.seriesFlow} onChange={(v) => editPhase(s, { target: v ?? 1.4 })} />
+                  <NumberStepper label={t("editor.phase.rampOver")} value={ph.rampS} unit="s" step={0.5} min={0} max={120} onChange={(v) => editPhase(s, { rampS: v ?? 0 })} />
+                  <NumberStepper label={t("editor.phase.maxPressure")} value={ph.maxPressureBar} unit="bar" step={0.5} min={0.5} max={12} nullable onChange={(v) => editPhase(s, { maxPressureBar: v })} />
                 </>
               )}
               {ph.kind === "power" && (
                 <>
-                  <NumberStepper label="Ziel" value={ph.target} unit="%" step={1} min={0} max={100} color={C.seriesPower} onChange={(v) => editPhase(s, { target: v ?? 60 })} />
-                  <NumberStepper label="Rampe über" value={ph.rampS} unit="s" step={0.5} min={0} max={120} onChange={(v) => editPhase(s, { rampS: v ?? 0 })} />
-                  <NumberStepper label="max. Druck" value={ph.maxPressureBar} unit="bar" step={0.5} min={0.5} max={12} nullable onChange={(v) => editPhase(s, { maxPressureBar: v })} />
-                  <NumberStepper label="max. Fluss" value={ph.maxFlowGs} unit="g/s" step={0.1} min={0.1} max={8} nullable onChange={(v) => editPhase(s, { maxFlowGs: v })} />
+                  <NumberStepper label={t("editor.phase.target")} value={ph.target} unit="%" step={1} min={0} max={100} color={C.seriesPower} onChange={(v) => editPhase(s, { target: v ?? 60 })} />
+                  <NumberStepper label={t("editor.phase.rampOver")} value={ph.rampS} unit="s" step={0.5} min={0} max={120} onChange={(v) => editPhase(s, { rampS: v ?? 0 })} />
+                  <NumberStepper label={t("editor.phase.maxPressure")} value={ph.maxPressureBar} unit="bar" step={0.5} min={0.5} max={12} nullable onChange={(v) => editPhase(s, { maxPressureBar: v })} />
+                  <NumberStepper label={t("editor.phase.maxFlow")} value={ph.maxFlowGs} unit="g/s" step={0.1} min={0.1} max={8} nullable onChange={(v) => editPhase(s, { maxFlowGs: v })} />
                 </>
               )}
               {ph.kind === "preinfusion" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  <span style={labelWithHelp}>Sanftheit <FieldHelp lines={[
-                    "füllt den Puck sanft mit Wasser",
-                    "ab 1 bar langsamer – wie langsam: Sanftheit",
-                    "Ende: Kaffee kommt in der Tasse an",
-                    "vor einer Druckphase: Ende beim Ausstieg (z. B. 4 bar)",
-                    "Ausstiege = Sicherheitsgrenze",
+                  <span style={labelWithHelp}>{t("editor.phase.fill")} <FieldHelp lines={[
+                    t("editor.help.fill.line1"),
+                    t("editor.help.fill.line2"),
                   ]} /></span>
-                  <Segmented label="Sanftheit" options={GENTLE} value={ph.gentleness ?? "normal"} color={C.seriesPower} onPick={(g) => editPhase(s, { gentleness: g })} />
+                  {/* normal wird nicht gespeichert — so bleibt der Hash bestehender Profile gleich. */}
+                  <Segmented label={t("editor.phase.fill")} options={fillOptions()} value={ph.fill ?? "normal"} color={C.seriesPower} onPick={(f) => editPhase(s, { fill: f === "fast" ? "fast" : undefined })} />
+                </div>
+              )}
+              {ph.kind === "preinfusion" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  <span style={labelWithHelp}>{t("editor.phase.gentleness")} <FieldHelp lines={[
+                    t("editor.help.gentleness.line1"),
+                    t("editor.help.gentleness.line2"),
+                    t("editor.help.gentleness.line3"),
+                    t("editor.help.gentleness.line4"),
+                  ]} /></span>
+                  <Segmented label={t("editor.phase.gentleness")} options={gentleOptions()} value={ph.gentleness ?? "normal"} color={C.seriesPower} onPick={(g) => editPhase(s, { gentleness: g })} />
                 </div>
               )}
               <span style={{ paddingBottom: 9, fontSize: 12, color: C.mut }}>
-                {ph.kind === "pause" ? "Pumpe aus, Bezugsventil bleibt offen: der Druck baut sich über den Puck ab."
-                  : ph.kind === "preinfusion" ? (arrivalGs(s) !== null ? `Füllt über den Zulauf, bis der Fluss 90 % von Phase ${s + 2} erreicht.` : "Danach folgt keine Flussphase: sie endet nur über die Ausstiege.")
+                {ph.kind === "pause" ? t("editor.phase.pauseHint")
+                  : ph.kind === "preinfusion" ? (arrivalGs(s) !== null ? t("editor.phase.arrivalHint") : t("editor.phase.pressureNextHint"))
                   : ""}
               </span>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <span style={fieldLabel}>Ausstieg</span>
+              <span style={fieldLabel}>{t("editor.exit.label")}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", minHeight: 32 }}>
                 {s === lastIdx && yieldG !== null && (
-                  <span style={{ ...chip, borderColor: alpha(C.grn, 0.45), color: C.grn, background: alpha(C.grn, 0.08), fontWeight: 600 }}>→ {fmt(yieldG)} g Yield</span>
+                  <span style={{ ...chip, borderColor: alpha(C.grn, 0.45), color: C.grn, background: alpha(C.grn, 0.08), fontWeight: 600 }}>{t("editor.exit.yieldChip", { v: fmt(yieldG) })}</span>
                 )}
                 {arrivalGs(s) !== null && <span style={{ ...chip, color: C.org, borderColor: alpha(C.org, 0.45) }}>F ≥ {fmt(arrivalGs(s)!)} g/s</span>}
                 {ph.exits.map((e, k) => (
@@ -1169,19 +1247,19 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                     onRemove={() => editPhase(s, { exits: ph.exits.filter((_, m) => m !== k) })}
                   />
                 ))}
-                {s < lastIdx && ph.exits.length === 0 && ph.kind !== "preinfusion" && <span style={{ fontSize: 12, color: C.red }}>fehlt</span>}
+                {s < lastIdx && ph.exits.length === 0 && ph.kind !== "preinfusion" && <span style={{ fontSize: 12, color: C.red }}>{t("editor.exit.missing")}</span>}
                 {addable.length > 0 && (
                   <select
                     value=""
-                    aria-label="Bedingung hinzufügen"
+                    aria-label={t("editor.exit.addCondition")}
                     onChange={(e) => {
                       const k = e.target.value as ExitKind;
-                      if (k) editPhase(s, { exits: [...ph.exits, { kind: k, value: EXIT_META[k].def }] });
+                      if (k) editPhase(s, { exits: [...ph.exits, { kind: k, value: exitMeta(k).def }] });
                     }}
                     style={{ height: 30, padding: "0 6px", borderRadius: 7, border: `1px dashed ${C.bdr3}`, background: "transparent", color: C.mut, fontSize: 12, fontFamily: "inherit" }}
                   >
-                    <option value="">+ Bedingung…</option>
-                    {addable.map((k) => <option key={k} value={k}>{EXIT_META[k].add}</option>)}
+                    <option value="">{t("editor.exit.addConditionOption")}</option>
+                    {addable.map((k) => <option key={k} value={k}>{exitMeta(k).add}</option>)}
                   </select>
                 )}
               </div>
@@ -1194,12 +1272,12 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
             {isScript && (
               <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  <span style={fieldLabel}>Skriptname</span>
+                  <span style={fieldLabel}>{t("editor.commands.scriptName")}</span>
                   <input
                     value={cur.title ?? ""}
                     maxLength={40}
                     placeholder={machineScriptTitle(draft.name, draft.variants[oi]!.name)}
-                    aria-label="Skriptname"
+                    aria-label={t("editor.commands.scriptName")}
                     onChange={(e) => commit(withCurve(draft, ai, { title: e.target.value === "" && cur.scriptId === null ? null : e.target.value }))}
                     style={{ width: 260, height: 34, boxSizing: "border-box", padding: "0 10px", borderRadius: 8, border: `1px solid ${cur.title !== null && !scriptNameOk(cur.title) ? C.red : C.bdrL}`, background: C.bg, color: C.txt, fontSize: 13, fontFamily: "inherit", outline: "none" }}
                   />
@@ -1210,19 +1288,19 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
               {isScript ? (
                 <>
                   <span style={{ fontSize: 12.5, color: C.txtS }}>
-                    {scriptId !== null ? `Skript #${scriptId} „${scripts.find((x) => x.id === scriptId)?.title ?? "?"}“` : "Neues Skript"}
+                    {scriptId !== null ? t("editor.commands.scriptLabel", { id: scriptId, title: scripts.find((x) => x.id === scriptId)?.title ?? "?" }) : t("editor.commands.newScript")}
                   </span>
                   <span style={{ fontSize: 11.5, color: C.mut }}>
-                    {(() => { const u = usersOf(scriptId, oi); return u.length ? `· auch: ${u.join(", ")}` : "· nur dieses Profil"; })()}
+                    {(() => { const u = usersOf(scriptId, oi); return u.length ? t("editor.commands.alsoUsedBy", { list: u.join(", ") }) : t("editor.commands.onlyThisProfile"); })()}
                   </span>
                 </>
               ) : (
-                <span style={{ fontSize: 12.5, color: C.txtS }}>Läuft in der App — ohne Maschinenbefehle</span>
+                <span style={{ fontSize: 12.5, color: C.txtS }}>{t("editor.commands.runsInApp")}</span>
               )}
               <span style={{ flex: 1 }} />
               <select
                 value=""
-                aria-label={isScript ? "Anderes Skript wählen" : "Skript wählen"}
+                aria-label={isScript ? t("editor.commands.chooseOther") : t("editor.commands.choose")}
                 onChange={(e) => {
                   const id = Number(e.target.value);
                   const sc = scripts.find((x) => x.id === id);
@@ -1231,22 +1309,22 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                 }}
                 style={{ height: 30, padding: "0 6px", borderRadius: 7, border: `1px solid ${C.bdr2}`, background: C.sunken, color: C.txtS, fontSize: 12, fontFamily: "inherit" }}
               >
-                <option value="">{isScript ? "Anderes Skript wählen…" : "Skript wählen…"}</option>
+                <option value="">{isScript ? t("editor.commands.chooseOtherOption") : t("editor.commands.chooseOption")}</option>
                 {scripts.filter((x) => x.id !== scriptId).map((x) => <option key={x.id} value={x.id}>{x.title} (#{x.id})</option>)}
               </select>
-              {isScript && <button onClick={() => setDialog({ kind: "insert" })} style={textBtn(false)}><Plus size={13} /> Befehl {selCmd !== null ? "danach " : ""}einfügen</button>}
-              <button onClick={() => setDialog({ kind: "help" })} style={textBtn(false)}>So laufen Skripte</button>
+              {isScript && <button onClick={() => setDialog({ kind: "insert" })} style={textBtn(false)}><Plus size={13} /> {selCmd !== null ? t("editor.commands.insertAfter") : t("editor.commands.insert")}</button>}
+              <button onClick={() => setDialog({ kind: "help" })} style={textBtn(false)}>{t("editor.commands.howScriptsRun")}</button>
             </div>
             {!isScript && (
               <p style={{ margin: "4px 0 0", fontSize: 13, color: C.mut, lineHeight: 1.45 }}>
-                Ventile, Signalton, Heizleistung oder Temperatur-Befehle gibt es nur im Skript. Mit „Skript wählen…“ läuft diese Variante als vorhandenes Skript.
+                {t("editor.commands.appOnlyHint")}
               </p>
             )}
             {isScript && cmds && (check.errors.length > 0 || check.warnings.length > 0 || overridden.size > 0) && (
               <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "8px 12px", borderRadius: 10, border: `1px solid ${C.bdr}`, background: C.card }}>
                 {check.errors.map((e) => <div key={e.code} style={{ fontSize: 12.5, color: C.red }}>✕ {e.message}</div>)}
                 {check.warnings.map((w) => <div key={w.code} style={{ fontSize: 12.5, color: C.org }}>⚠ {w.message}</div>)}
-                {overridden.size > 0 && <div style={{ fontSize: 12.5, color: C.org }}>⚠ Ein Pumpenbefehl ohne „Warten“ danach wird sofort vom nächsten überschrieben und läuft nie.</div>}
+                {overridden.size > 0 && <div style={{ fontSize: 12.5, color: C.org }}>⚠ {t("editor.commands.overriddenWarning")}</div>}
               </div>
             )}
             {isScript && cmds && (
@@ -1267,21 +1345,21 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                <span style={fieldLabel}>Name</span>
+                <span style={fieldLabel}>{t("editor.variant.name")}</span>
                 <input
                   value={av.name}
                   maxLength={40}
-                  aria-label="Name der Variante"
+                  aria-label={t("editor.variant.nameAria")}
                   onChange={(e) => commit(withVariant(draft, ai, { name: e.target.value }))}
                   style={{ width: 190, height: 34, boxSizing: "border-box", padding: "0 10px", borderRadius: 8, border: `1px solid ${av.name.trim() ? C.bdrL : C.red}`, background: C.bg, color: C.txt, fontSize: 14, fontWeight: 600, fontFamily: "inherit", outline: "none" }}
                 />
               </div>
               {!maintenance && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                  <span style={fieldLabel}>Vorgabe-Sieb</span>
+                  <span style={fieldLabel}>{t("editor.variant.basket")}</span>
                   <select
                     value={av.basketId ?? ""}
-                    aria-label="Vorgabe-Sieb"
+                    aria-label={t("editor.variant.basket")}
                     onChange={(e) => commit(withVariant(draft, ai, { basketId: e.target.value === "" ? null : Number(e.target.value) }))}
                     style={selectStyle}
                   >
@@ -1291,17 +1369,17 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                 </div>
               )}
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                <span style={fieldLabel}>Kurve</span>
+                <span style={fieldLabel}>{t("editor.variant.curve")}</span>
                 <select
                   value={av.sameAs ?? ""}
-                  aria-label="Kurve der Variante"
+                  aria-label={t("editor.variant.curveAria")}
                   disabled={followers.length > 0}
                   onChange={(e) => setSameAs(e.target.value === "" ? null : Number(e.target.value))}
                   style={selectStyle}
                 >
-                  <option value="">eigene Kurve</option>
+                  <option value="">{t("editor.variant.ownCurve")}</option>
                   {draft.variants.filter((x, k) => k !== ai && x.sameAs === null).map((x) => (
-                    <option key={x.key} value={x.key}>wie {x.name.trim() || "—"}</option>
+                    <option key={x.key} value={x.key}>{t("editor.sameAs", { name: x.name.trim() || "—" })}</option>
                   ))}
                 </select>
               </div>
@@ -1311,12 +1389,15 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                 disabled={draft.variants.length <= 1}
                 style={{ ...textBtn(false, draft.variants.length > 1), color: draft.variants.length > 1 ? C.red : C.dim }}
               >
-                <Trash2 size={13} /> Variante löschen
+                <Trash2 size={13} /> {t("editor.variant.remove")}
               </button>
             </div>
             {followers.length > 0 && (
               <span style={{ fontSize: 12, color: C.mut }}>
-                {followers.map((f) => `„${f.name.trim()}“`).join(", ")} {followers.length === 1 ? "fährt" : "fahren"} diese Kurve mit.
+                {(() => {
+                  const names = followers.map((f) => t("editor.quote", { text: f.name.trim() })).join(", ");
+                  return followers.length === 1 ? t("editor.variant.followsOne", { names }) : t("editor.variant.followsMany", { names });
+                })()}
               </span>
             )}
           </div>
@@ -1328,19 +1409,43 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
             variantId={av.id}
             variantName={av.name.trim()}
             // Verlaesst den Editor — mit ungespeicherten Aenderungen nur nach Rueckfrage.
-            onOpenHistory={onOpenHistory && ((f) => { if (!dirty || window.confirm("Änderungen verwerfen?")) onOpenHistory(f); })}
-            onOpenCoffee={onOpenCoffee && ((id) => { if (!dirty || window.confirm("Änderungen verwerfen?")) onOpenCoffee(id); })}
+            onOpenHistory={onOpenHistory && ((f) => { if (!dirty || window.confirm(t("editor.dialog.discard.title"))) onOpenHistory(f); })}
+            onOpenCoffee={onOpenCoffee && ((id) => { if (!dirty || window.confirm(t("editor.dialog.discard.title"))) onOpenCoffee(id); })}
           />
         )}
 
         {tab === "notiz" && (
-          <textarea
-            value={draft.notes}
-            aria-label="Notiz"
-            placeholder="z.B. Mahlgrad, kurz der Ablauf"
-            onChange={(e) => commit({ ...draft, notes: e.target.value })}
-            style={{ width: "100%", height: 130, boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bdr2}`, background: C.bg, color: C.txt, fontSize: 13, fontFamily: "inherit", lineHeight: 1.45, resize: "none", outline: "none" }}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {/* Einordnung: mehrere moeglich (ein Profil kann fuer dunkel und hell passen). */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={fieldLabel}>{t("editor.fit.label")}</span>
+              <div role="group" aria-label={t("editor.fit.label")} style={{ display: "inline-flex", border: `1px solid ${C.bdr2}`, borderRadius: 9, overflow: "hidden" }}>
+                {PROFILE_FITS.map((f, i) => {
+                  const on = draft.fit.includes(f);
+                  return (
+                    <button
+                      key={f}
+                      aria-pressed={on}
+                      onClick={() => commit({ ...draft, fit: PROFILE_FITS.filter((x) => (x === f ? !on : draft.fit.includes(x))) })}
+                      style={{
+                        padding: "6px 12px", border: "none", borderLeft: i > 0 ? `1px solid ${C.bdr2}` : "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600,
+                        background: on ? C.accG2 : "transparent", color: on ? C.acc : C.mut,
+                      }}
+                    >
+                      {t(`editor.fit.${f}`)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <textarea
+              value={draft.notes}
+              aria-label={t("editor.note.aria")}
+              placeholder={t("editor.note.placeholder")}
+              onChange={(e) => commit({ ...draft, notes: e.target.value })}
+              style={{ width: "100%", height: 130, boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.bdr2}`, background: C.bg, color: C.txt, fontSize: 13, fontFamily: "inherit", lineHeight: 1.45, resize: "none", outline: "none" }}
+            />
+          </div>
         )}
       </div>
 
@@ -1358,7 +1463,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
           )}
           {dialog.kind === "help" && (
             <>
-              <h3 style={modalTitle}>So laufen Skripte</h3>
+              <h3 style={modalTitle}>{t("editor.commands.howScriptsRun")}</h3>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.55, color: C.txtS }}>
                 {SCRIPT_MODEL_HELP.map((t, i) => <li key={i} style={{ marginBottom: 6 }}>{t}</li>)}
               </ul>
@@ -1366,38 +1471,38 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
           )}
           {dialog.kind === "discard" && (
             <>
-              <h3 style={modalTitle}>Änderungen verwerfen?</h3>
+              <h3 style={modalTitle}>{t("editor.dialog.discard.title")}</h3>
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button onClick={() => setDialog(null)} style={textBtn(false)}>Weiter bearbeiten</button>
-                <button onClick={() => { const next = dialog.then; setDialog(null); if (next) next(); else onClose(); }} style={{ ...textBtn(false), color: C.red, borderColor: C.red }}>Verwerfen</button>
+                <button onClick={() => setDialog(null)} style={textBtn(false)}>{t("editor.dialog.discard.keep")}</button>
+                <button onClick={() => { const next = dialog.then; setDialog(null); if (next) next(); else onClose(); }} style={{ ...textBtn(false), color: C.red, borderColor: C.red }}>{t("editor.dialog.discard.discard")}</button>
               </div>
             </>
           )}
           {dialog.kind === "full" && (
             <>
-              <h3 style={modalTitle}>Kein freier Skript-Platz</h3>
+              <h3 style={modalTitle}>{t("editor.dialog.full.title")}</h3>
               <p style={modalText}>
-                Die Maschine hat keinen Platz für ein weiteres Skript; das Profil ist noch nicht gespeichert.
-                {loose.length > 0 ? " Ein Skript ohne Profil löschen, dann erneut speichern:" : " Es gibt kein Skript ohne Profil — eine Variante „wie …“ statt eigener Kurve braucht keinen Platz."}
+                {t("editor.dialog.full.text")}
+                {" "}{loose.length > 0 ? t("editor.dialog.full.deleteLoose") : t("editor.dialog.full.noLoose")}
               </p>
               {loose.map((x) => (
                 <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36 }}>
-                  <span style={{ flex: 1, fontSize: 13, color: C.txtS }}>#{x.id} „{x.title}“</span>
-                  <button onClick={() => void deleteLoose(x.id, x.title)} disabled={busy} style={{ ...textBtn(false, !busy), color: C.red }}><Trash2 size={13} /> Löschen</button>
+                  <span style={{ flex: 1, fontSize: 13, color: C.txtS }}>{t("editor.dialog.full.looseItem", { id: x.id, title: x.title })}</span>
+                  <button onClick={() => void deleteLoose(x.id, x.title)} disabled={busy} style={{ ...textBtn(false, !busy), color: C.red }}><Trash2 size={13} /> {t("editor.common.delete")}</button>
                 </div>
               ))}
               {saveErr && <div style={{ fontSize: 12.5, color: C.red }}>{saveErr}</div>}
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
-                <button onClick={() => setDialog(null)} disabled={busy} style={textBtn(false)}>Zurück</button>
-                <button onClick={() => void runSave(planSave(), dialog.choice)} disabled={busy} style={textBtn(true, !busy)}>Erneut speichern</button>
+                <button onClick={() => setDialog(null)} disabled={busy} style={textBtn(false)}>{t("editor.common.back")}</button>
+                <button onClick={() => void runSave(planSave(), dialog.choice)} disabled={busy} style={textBtn(true, !busy)}>{t("editor.dialog.full.retry")}</button>
               </div>
             </>
           )}
           {dialog.kind === "conflict" && (
             <>
-              <h3 style={modalTitle}>An der Maschine geändert</h3>
+              <h3 style={modalTitle}>{t("editor.dialog.conflict.title")}</h3>
               <p style={modalText}>
-                Das Skript wurde geändert, seit du es hier geöffnet hast — vermutlich in der Xenia-Oberfläche. Überschrieben wurde nichts.
+                {t("editor.dialog.conflict.text")}
               </p>
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
                 <button
@@ -1408,7 +1513,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                   }}
                   style={textBtn(false)}
                 >
-                  Maschinenstand laden
+                  {t("editor.dialog.conflict.loadMachine")}
                 </button>
                 <button
                   onClick={() => {
@@ -1416,7 +1521,7 @@ function EditorBody({ profile, profiles, scripts, scriptActions, onSaveProfile, 
                   }}
                   style={textBtn(true, true)}
                 >
-                  Meine Fassung als neues Skript
+                  {t("editor.dialog.conflict.mineAsNew")}
                 </button>
               </div>
             </>
@@ -1466,7 +1571,7 @@ function textBtn(primary: boolean, enabled = true): React.CSSProperties {
 }
 
 function ExitChip({ exit, or, onChange, onRemove }: { exit: PhaseExit; or: boolean; onChange: (v: number) => void; onRemove: () => void }) {
-  const m = EXIT_META[exit.kind];
+  const m = exitMeta(exit.kind);
   const [txt, setTxt] = useState(fmt(exit.value));
   useEffect(() => { setTxt(fmt(exit.value)); }, [exit.value]);
   const commit = () => {
@@ -1476,7 +1581,7 @@ function ExitChip({ exit, or, onChange, onRemove }: { exit: PhaseExit; or: boole
   };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      {or && <span style={{ fontSize: 11, color: C.mut }}>oder</span>}
+      {or && <span style={{ fontSize: 11, color: C.mut }}>{t("editor.exit.or")}</span>}
       <span style={{ ...chip, paddingRight: 2 }}>
         {m.pre}
         <input
@@ -1489,25 +1594,25 @@ function ExitChip({ exit, or, onChange, onRemove }: { exit: PhaseExit; or: boole
           style={{ width: 44, height: 24, boxSizing: "border-box", padding: "0 4px", border: "none", borderRadius: 5, background: C.bg, color: C.txt, fontSize: 12, fontWeight: 600, textAlign: "right", ...MONO, outline: "none" }}
         />
         {m.unit}
-        <button onClick={onRemove} aria-label={`${m.add} entfernen`} style={{ width: 24, height: 24, border: "none", background: "transparent", color: C.mut, cursor: "pointer", fontSize: 14 }}>×</button>
+        <button onClick={onRemove} aria-label={t("editor.exit.remove", { label: m.add })} style={{ width: 24, height: 24, border: "none", background: "transparent", color: C.mut, cursor: "pointer", fontSize: 14 }}>×</button>
       </span>
     </span>
   );
 }
 
 function TempField({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
-  const [txt, setTxt] = useState(value === null ? "" : value.toFixed(1).replace(".", ","));
-  useEffect(() => { setTxt(value === null ? "" : value.toFixed(1).replace(".", ",")); }, [value]);
+  const [txt, setTxt] = useState(value === null ? "" : dec(value.toFixed(1)));
+  useEffect(() => { setTxt(value === null ? "" : dec(value.toFixed(1))); }, [value]);
   return (
     <label style={{ display: "inline-flex", alignItems: "center", gap: 4, height: 36, padding: "0 8px", borderRadius: 9, border: `1px solid ${C.bdrL}`, color: C.mut, fontSize: 12 }}>
       <input
         value={txt}
         inputMode="decimal"
         placeholder="—"
-        aria-label="Brüh-Soll-Temperatur"
+        aria-label={t("editor.header.temp")}
         onChange={(e) => setTxt(e.target.value)}
         onBlur={() => {
-          const reset = () => setTxt(value === null ? "" : value.toFixed(1).replace(".", ","));
+          const reset = () => setTxt(value === null ? "" : dec(value.toFixed(1)));
           if (txt.trim() === "") { if (value !== null) onChange(null); else reset(); return; }
           const n = Number(txt.replace(",", "."));
           const v = Math.round(n * 10) / 10;
@@ -1524,7 +1629,7 @@ function TempField({ value, onChange }: { value: number | null; onChange: (v: nu
 function YieldField({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span style={fieldLabel}>Yield</span>
+      <span style={fieldLabel}>{t("editor.header.yield")}</span>
       <NumberStepperInline value={value} onChange={onChange} />
     </div>
   );
@@ -1540,12 +1645,12 @@ function NumberStepperInline({ value, onChange }: { value: number | null; onChan
   };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-      <button type="button" aria-label="Yield verringern" onClick={() => set((value ?? 1) - 0.5)} style={btn}>−</button>
+      <button type="button" aria-label={t("editor.stepper.decrease", { label: t("editor.header.yield") })} onClick={() => set((value ?? 1) - 0.5)} style={btn}>−</button>
       <input
         value={txt}
         inputMode="decimal"
         placeholder="—"
-        aria-label="Yield"
+        aria-label={t("editor.header.yield")}
         onChange={(e) => setTxt(e.target.value)}
         onBlur={() => {
           if (txt.trim() === "") { set(null); return; }
@@ -1556,7 +1661,7 @@ function NumberStepperInline({ value, onChange }: { value: number | null; onChan
         style={{ width: 54, height: 34, boxSizing: "border-box", textAlign: "center", borderRadius: 8, border: `1px solid ${C.bdr2}`, background: C.bg, color: C.txt, fontSize: 14, fontWeight: 600, ...MONO, outline: "none" }}
       />
       <span style={{ fontSize: 11, color: C.mut }}>g</span>
-      <button type="button" aria-label="Yield erhöhen" onClick={() => set((value ?? 0) + 0.5)} style={btn}>+</button>
+      <button type="button" aria-label={t("editor.stepper.increase", { label: t("editor.header.yield") })} onClick={() => set((value ?? 0) + 0.5)} style={btn}>+</button>
     </span>
   );
 }
@@ -1578,7 +1683,7 @@ function SaveDialog({ plans, choice, busy, error, onChoice, onCancel, onConfirm 
   );
   return (
     <>
-      <h3 style={modalTitle}>Speichern</h3>
+      <h3 style={modalTitle}>{t("editor.common.save")}</h3>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {plans.filter((p) => p.case.kind !== "profileOnly").map((p) => {
           const c = p.case;
@@ -1588,28 +1693,28 @@ function SaveDialog({ plans, choice, busy, error, onChoice, onCancel, onConfirm 
               {c.kind === "overwrite" && (
                 <>
                   <span style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.45 }}>
-                    Skript #{c.scriptId} „{p.title}“ an der Maschine.{" "}
-                    {c.otherUsers.length > 0 ? `Dasselbe Skript nutzt auch: ${c.otherUsers.join(", ")}.`
-                      : c.otherSlot ? `Gilt auch für ${p.followers.map((n) => `„${n}“`).join(", ")}.` : "Nur diese Variante nutzt es."}
-                    {" "}Die alte Fassung bleibt an den bisherigen Bezügen lesbar.
+                    {t("editor.save.scriptOnMachine", { id: c.scriptId, title: p.title })}{" "}
+                    {c.otherUsers.length > 0 ? t("editor.save.otherUsers", { list: c.otherUsers.join(", ") })
+                      : c.otherSlot ? t("editor.save.alsoFor", { list: p.followers.map((n) => t("editor.quote", { text: n })).join(", ") }) : t("editor.save.onlyThisVariant")}
+                    {" "}{t("editor.save.oldVersionReadable")}
                   </span>
-                  {radio(p.key, "overwrite", c.otherUsers.length > 0 ? "Für alle ändern (überschreiben)" : "Überschreiben")}
-                  {radio(p.key, "new", `${c.otherUsers.length > 0 ? "Nur hier — als neues Skript" : "Als neues Skript"} „${p.newTitle}“`)}
+                  {radio(p.key, "overwrite", c.otherUsers.length > 0 ? t("editor.save.overwriteAll") : t("editor.save.overwrite"))}
+                  {radio(p.key, "new", c.otherUsers.length > 0 ? t("editor.save.newScriptHere", { title: p.newTitle }) : t("editor.save.newScript", { title: p.newTitle }))}
                 </>
               )}
               {c.kind === "newScript" && (
                 <span style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.45 }}>
-                  Wird als neues Skript „{p.newTitle}“ an der Maschine angelegt.
+                  {t("editor.save.createdAs", { title: p.newTitle })}
                 </span>
               )}
               {p.warnings.map((w, k) => <span key={k} style={{ fontSize: 12, color: C.org, lineHeight: 1.4 }}>⚠ {w}</span>)}
               {c.kind === "toApp" && (
                 <>
                   <span style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.45 }}>
-                    Läuft künftig in der App. {c.stillUsed ? `Skript #${c.scriptId} bleibt an der Maschine, es wird noch gebraucht.` : `Skript #${c.scriptId} braucht dann niemand mehr.`}
+                    {t("editor.save.toApp")} {c.stillUsed ? t("editor.save.stillUsed", { id: c.scriptId }) : t("editor.save.notNeeded", { id: c.scriptId })}
                   </span>
-                  {!c.stillUsed && radio(p.key, "keep", "An der Maschine behalten")}
-                  {!c.stillUsed && radio(p.key, "delete", "An der Maschine löschen")}
+                  {!c.stillUsed && radio(p.key, "keep", t("editor.save.keep"))}
+                  {!c.stillUsed && radio(p.key, "delete", t("editor.save.delete"))}
                 </>
               )}
             </div>
@@ -1617,8 +1722,8 @@ function SaveDialog({ plans, choice, busy, error, onChoice, onCancel, onConfirm 
         })}
         {error && <div style={{ fontSize: 12.5, color: C.red }}>{error}</div>}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button onClick={onCancel} disabled={busy} style={textBtn(false)}>Zurück</button>
-          <button onClick={onConfirm} disabled={busy} style={textBtn(true, !busy)}>{busy ? "Schreibe…" : "Speichern"}</button>
+          <button onClick={onCancel} disabled={busy} style={textBtn(false)}>{t("editor.common.back")}</button>
+          <button onClick={onConfirm} disabled={busy} style={textBtn(true, !busy)}>{busy ? t("editor.save.writing") : t("editor.common.save")}</button>
         </div>
       </div>
     </>

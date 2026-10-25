@@ -1,6 +1,7 @@
 import { getDb } from "./index.js";
 import { saveVariants, syncProfileVariants, variantsByProfile, variantsOf } from "./variant-repo.js";
-import type { Profile, ProfileCreate, ProfileUpdate } from "../../../shared/src/types.js";
+import type { Profile, ProfileCreate, ProfileFit, ProfileUpdate } from "../../../shared/src/types.js";
+import { isProfileFitList } from "../../../shared/src/types.js";
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -30,15 +31,17 @@ export class SqliteProfileRepo implements ProfileRepo {
     const result = db
       .prepare(
         `INSERT INTO profile
-           (name, kind, trial, description, script_single, script_double,
+           (name, kind, trial, fit, archived, description, script_single, script_double,
             yield_single_g, yield_double_g, fav, sort_order, notes, target_temp_c,
             brew_steps, brew_steps_double)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         profile.name,
         profile.kind ?? "brew",
         profile.isTrial ? 1 : 0,
+        fitColumn(profile.fit),
+        profile.isArchived ? 1 : 0,
         null, // description always null in V1 — no editor field yet
         profile.scriptIdSingle ?? null,
         profile.scriptIdDouble ?? null,
@@ -127,6 +130,8 @@ export class SqliteProfileRepo implements ProfileRepo {
       name:               "name",
       kind:               "kind",
       isTrial:            "trial",
+      fit:                "fit",
+      isArchived:         "archived",
       scriptIdSingle:     "script_single",
       scriptIdDouble:     "script_double",
       yieldTargetSingleG: "yield_single_g",
@@ -150,6 +155,8 @@ export class SqliteProfileRepo implements ProfileRepo {
       const values: (null | number | string)[] = entries.map(([k, v]) => {
         if (k === "brewSteps" || k === "brewStepsDouble") return v ? JSON.stringify(v) : null;
         if (k === "isTrial") return v ? 1 : 0;
+        if (k === "fit") return fitColumn(v as ProfileFit[] | undefined);
+        if (k === "isArchived") return v ? 1 : 0;
         return (v as null | number | string) ?? null;
       });
 
@@ -204,6 +211,8 @@ interface RawProfileRow {
   name: string;
   kind: "brew" | "maintenance";
   trial: number;
+  fit: string | null;
+  archived: number;
   description: string | null;
   icon: string | null; // column exists in DB, intentionally ignored
   script_single: number | null;
@@ -220,12 +229,29 @@ interface RawProfileRow {
   updated_at: string;
 }
 
+/** Einordnung als Spalte: JSON-Liste, leer = NULL. */
+function fitColumn(fit: ProfileFit[] | undefined | null): string | null {
+  return fit && fit.length > 0 ? JSON.stringify(fit) : null;
+}
+
+function parseFit(raw: string | null): ProfileFit[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isProfileFitList(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
 function toProfile(row: RawProfileRow): Profile {
   return {
     id: row.id,
     name: row.name,
     kind: row.kind,
     isTrial: row.trial === 1,
+    fit: parseFit(row.fit),
+    isArchived: row.archived === 1,
     description: row.description,
     scriptIdSingle: row.script_single, // null = flow-driven profile (brewSteps)
     scriptIdDouble: row.script_double,

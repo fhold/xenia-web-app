@@ -11,7 +11,7 @@ import type { BrewProfile, BrewStep, FlowControllerKind, StepExit } from "./type
 export type StepsCheck = { ok: true } | { ok: false; error: string };
 
 const OK: StepsCheck = { ok: true };
-const EXIT_KEYS = ["seconds", "weightG", "pressureBar", "pressureBelowBar", "flowGs"] as const;
+const EXIT_KEYS = ["seconds", "weightG", "pressureBar", "pressureBelowBar", "flowGs", "flowAboveGs"] as const;
 const CONTROLLERS: FlowControllerKind[] = ["adaptive", "pi"];
 
 function isPositive(v: unknown): v is number {
@@ -34,6 +34,15 @@ export function hasExit(exit: StepExit | undefined): boolean {
   return exit !== undefined && EXIT_KEYS.some((k) => exit[k] !== undefined);
 }
 
+/**
+ * Endet der Bezug ohne Ziel von selbst? Dann braucht die letzte Stufe einen
+ * Ausstieg (Zeit, Gewicht, Druck, Fluss) — sie beendet ihn wie bei der Decent
+ * ein Profil ohne Zielgewicht. Mit Ziel stoppt weiter die Waage.
+ */
+export function endsWithoutYield(steps: BrewStep[] | null | undefined): boolean {
+  return !!steps && steps.length > 0 && hasExit(steps[steps.length - 1]!.exit);
+}
+
 function checkOptionalCap(v: unknown, i: number, field: string): StepsCheck {
   if (v === undefined) return OK;
   if (!isPositive(v)) return { ok: false, error: `Step ${i}: ${field} must be a positive number` };
@@ -46,6 +55,9 @@ function checkStep(s: BrewStep, i: number): StepsCheck {
   }
   if (s.name !== undefined && typeof s.name !== "string") {
     return { ok: false, error: `Step ${i}: name must be a string` };
+  }
+  if (s.tone !== undefined && typeof s.tone !== "boolean") {
+    return { ok: false, error: `Step ${i}: tone must be true or false` };
   }
   // A ramp of 0 ms is the documented "jump straight to target" case.
   if (s.rampMs !== undefined && !(typeof s.rampMs === "number" && Number.isFinite(s.rampMs) && s.rampMs >= 0)) {
@@ -68,6 +80,9 @@ function checkStep(s: BrewStep, i: number): StepsCheck {
       break;
     }
     case "pressure": {
+      if (s.adoptPressure !== undefined && typeof s.adoptPressure !== "boolean") {
+        return { ok: false, error: `Step ${i}: adoptPressure must be true or false` };
+      }
       if (!isPositive(s.targetPressureBar)) {
         return { ok: false, error: "Each pressure step needs a positive targetPressureBar" };
       }
@@ -91,6 +106,9 @@ function checkStep(s: BrewStep, i: number): StepsCheck {
       if (s.gentleness !== undefined && !["gentle", "normal", "brisk"].includes(s.gentleness)) {
         return { ok: false, error: `Step ${i}: gentleness must be gentle, normal or brisk` };
       }
+      if (s.fill !== undefined && !["normal", "fast"].includes(s.fill)) {
+        return { ok: false, error: `Step ${i}: fill must be normal or fast` };
+      }
       break;
     }
     default:
@@ -111,7 +129,7 @@ export function validateBrewSteps(steps: BrewStep[]): StepsCheck {
     if (i < steps.length - 1 && !hasExit(steps[i]?.exit)) {
       return {
         ok: false,
-        error: `Step ${i} needs an exit (seconds / weightG / pressureBar / pressureBelowBar / flowGs)`,
+        error: `Step ${i} needs an exit (seconds / weightG / pressureBar / pressureBelowBar / flowGs / flowAboveGs)`,
       };
     }
   }

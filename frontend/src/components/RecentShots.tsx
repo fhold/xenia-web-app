@@ -3,6 +3,7 @@
  * of cards that flex-fill the available width. Sits below the chart area.
  *
  * Card count adapts to the breakpoint (mobile 3 / tablet 4 / desktop 5).
+ * On the phone two cards fill the width; the third is a swipe away.
  * Always visible; the per-card repeat button is dimmed while a brew runs —
  * still clickable, so the refusal can explain itself instead of doing nothing.
  */
@@ -71,14 +72,16 @@ export function RecentShots({ reloadKey, repeatBlocked, onRepeat }: RecentShotsP
     );
   }
 
+  const compact = breakpoint === "mobile";
   return (
-    <div style={rowStyle}>
+    <div style={compact ? { ...rowStyle, scrollSnapType: "x mandatory" } : rowStyle}>
       {visible.map((shot) => (
         <RecentShotCard
           key={shot.id}
           shot={shot}
           blocked={repeatBlocked}
           onRepeat={onRepeat}
+          compact={compact}
         />
       ))}
     </div>

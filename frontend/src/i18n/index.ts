@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import { de } from "./de.js";
 import { en } from "./en.js";
+import { setSharedLang } from "@shared/shared-lang.js";
 
 export type Language = "de" | "en";
 
@@ -32,6 +33,9 @@ let currentLang: Language = (() => {
   }
 })();
 
+// Texte aus dem gemeinsamen Code (shared/) in derselben Sprache.
+setSharedLang(currentLang);
+
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
@@ -45,6 +49,7 @@ export function getCurrentLanguage(): Language {
 
 export function setLanguage(lang: Language): void {
   currentLang = lang;
+  setSharedLang(lang);
   try {
     localStorage.setItem(STORAGE_KEY, lang);
   } catch {

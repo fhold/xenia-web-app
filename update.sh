@@ -10,6 +10,11 @@
 #   DB_PATH        database file                   (default backend/data/xenia.db)
 #   PORT           port of the app, for the check  (default 3001)
 #
+# Your own commits are kept: the update is merged with them. Updates come from
+# the remote "upstream" if there is one (a fork: origin is your fork, upstream
+# the original), else from the branch this one tracks; XENIA_UPDATE_FROM=<ref>
+# overrides both. If your commits conflict with the update, nothing is changed.
+#
 # The running app is not touched until everything is built. If a step fails,
 # the script stops and prints how to go back.
 set -euo pipefail
@@ -21,7 +26,7 @@ dry=0
 case "${1:-}" in
   "") ;;
   --dry-run) dry=1 ;;
-  -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
   *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
 esac
 
@@ -78,24 +83,44 @@ fi
 
 # --- What is new ------------------------------------------------------------
 say "Looking for a new version"
-git fetch --quiet
+# A fork pulls from "upstream" (the original), a plain clone from its own branch.
+if [ -n "${XENIA_UPDATE_FROM:-}" ]; then src="$XENIA_UPDATE_FROM"
+elif git remote get-url upstream >/dev/null 2>&1; then src="upstream/main"
+else src="@{u}"; fi
+if [ "$src" = "@{u}" ]; then git fetch --quiet
+else git fetch --quiet "${src%%/*}"; fi
 old="$(git rev-parse HEAD)"
-new="$(git rev-parse '@{u}')"
+new="$(git rev-parse "$src" 2>/dev/null)" || fail "cannot find $src — set XENIA_UPDATE_FROM=<remote>/<branch>"
+name="$src"; [ "$src" = "@{u}" ] && name="$(git rev-parse --abbrev-ref '@{u}')"
+behind="$(git rev-list --count "$old..$new")"
+# Anything here that the update lacks rules out a fast-forward; shown are only
+# real changes, not the merges of earlier updates.
+own="$(git rev-list --count "$new..$old")"
+own_shown="$(git rev-list --count --no-merges "$new..$old")"
 # The build records the commit it was made from. A checkout pulled by hand
 # (e.g. to get this script) is newer than its build and gets built here.
 stamp="$repo/backend/dist/.built-from"
 built="$(cat "$stamp" 2>/dev/null || true)"
-if [ "$old" = "$new" ]; then
-  if [ "$built" = "$new" ]; then
+if [ "$behind" = 0 ]; then
+  if [ "$built" = "$old" ]; then
     echo "  already up to date ($(git log -1 --format='%h %cs' HEAD))"
     exit 0
   fi
   echo "  code is current ($(git log -1 --format='%h %cs' HEAD)), but not built yet"
 else
-  git merge-base --is-ancestor "$old" "$new" ||
-    fail "your branch has commits that are not upstream — cannot update automatically"
-  echo "  $(git rev-list --count "$old..$new") new commit(s):"
+  echo "  $behind new commit(s) from $name:"
   git log --format='    %h %cs %s' "$old..$new" | head -n 20
+  if [ "$own" != 0 ]; then
+    echo "  your $own_shown own commit(s) are kept:"
+    git log --no-merges --format='    %h %cs %s' "$new..$old" | head -n 20
+    # Try the merge in memory first — on a conflict nothing is touched.
+    if ! merged="$(git merge-tree --write-tree --name-only --no-messages "$old" "$new")"; then
+      fail "your own commits conflict with the update in:
+$(printf '%s\n' "$merged" | tail -n +2 | sed 's/^/    /')
+  Nothing was changed. Merge by hand (git merge $name), resolve, commit,
+  then run ./update.sh again."
+    fi
+  fi
 fi
 
 # --- Back up the database ---------------------------------------------------
@@ -118,7 +143,7 @@ fi
 
 rollback() {
   printf '\nTo go back to the previous version:\n'
-  if [ "$old" != "$new" ]; then
+  if [ "$behind" != 0 ]; then
     printf '  cd %s && git reset --hard %s\n' "$repo" "${old:0:7}"
   else
     printf '  cd %s && git reflog   # find the commit before your last pull, then git reset --hard <it>\n' "$repo"
@@ -131,9 +156,10 @@ rollback() {
 trap 'rc=$?; [ "$rc" = 0 ] || [ "$dry" = 1 ] || rollback' EXIT
 
 # --- Update and build -------------------------------------------------------
-if [ "$old" != "$new" ]; then
+if [ "$behind" != 0 ]; then
   say "Getting the new version"
-  run git merge --ff-only --quiet "$new"
+  if [ "$own" = 0 ]; then run git merge --ff-only --quiet "$new"
+  else run git merge --quiet --no-edit -m "Update from $name" "$new"; fi
 fi
 
 say "Installing dependencies and building"
@@ -147,7 +173,7 @@ for pkg in backend frontend; do
   fi
 done
 
-[ "$dry" = 1 ] || echo "$new" > "$stamp"
+[ "$dry" = 1 ] || git rev-parse HEAD > "$stamp"
 
 # --- Restart ----------------------------------------------------------------
 if [ "$has_service" = 0 ]; then
@@ -169,8 +195,9 @@ fi
 for _ in $(seq 1 30); do
   if node -e 'fetch(process.argv[1]).then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
        "http://localhost:$port/health"; then
-    if [ "$old" != "$new" ]; then say "Updated ${old:0:7} → ${new:0:7}${backup:+ — backup: $backup}"
-    else say "Built and restarted ${new:0:7}${backup:+ — backup: $backup}"; fi
+    now="$(git rev-parse --short HEAD)"
+    if [ "$behind" != 0 ]; then say "Updated ${old:0:7} → $now${backup:+ — backup: $backup}"
+    else say "Built and restarted $now${backup:+ — backup: $backup}"; fi
     exit 0
   fi
   sleep 1

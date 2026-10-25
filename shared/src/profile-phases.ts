@@ -22,17 +22,18 @@
  * trennen wuerde.
  */
 
-import type { BrewStep, ParsedCmd, PreinfusionGentleness, StepExit } from "./types.js";
+import type { BrewStep, ParsedCmd, PreinfusionFill, PreinfusionGentleness, StepExit } from "./types.js";
 import { CMD_HELP } from "./script-help.js";
 import { makeCmd, setArg, insertCmd, removeCmd, insertWithWait } from "./script-edit.js";
 import { serializeScript } from "./script-serializer.js";
+import { L } from "./shared-lang.js";
 
 // ---------------------------------------------------------------------------
 // Modell
 // ---------------------------------------------------------------------------
 
 export type PhaseKind = "pressure" | "flow" | "power" | "pause" | "preinfusion";
-export type ExitKind = "weight" | "pressureAbove" | "pressureBelow" | "flowBelow" | "time" | "tempAbove";
+export type ExitKind = "weight" | "pressureAbove" | "pressureBelow" | "flowBelow" | "flowAbove" | "time" | "tempAbove";
 /** Werte in Anzeige-Einheiten: g, bar, g/s, s, °C. */
 export interface PhaseExit { kind: ExitKind; value: number }
 
@@ -46,11 +47,18 @@ export interface Phase {
   maxFlowGs: number | null;
   /** Nur Preinfusion. */
   gentleness: PreinfusionGentleness | null;
+  /** Nur Preinfusion; fehlt = normal (PreinfusionStep.fill). */
+  fill?: PreinfusionFill;
   /** Nur Fluss: das Ziel beim Eintritt vom Puck uebernehmen (FlowStep.adoptFlow);
    *  `target` ist dann der erwartete Wert. */
   adoptFlow?: boolean;
+  /** Nur Druck: das Ziel beim Eintritt vom Puck uebernehmen (PressureStep.adoptPressure). */
+  adoptPressure?: boolean;
   /** Freier Name; null = automatisch. Skript-Phasen haben (noch) keinen. */
   name: string | null;
+  /** Ton am Phasenende uebers Tablet (BrewStep.tone) — nur in der App. Im Skript
+   *  piept die Maschine selbst (Befehl „Signalton“). */
+  tone?: boolean;
   /** Oder-verknuepft: die erste erfuellte Bedingung beendet die Phase. */
   exits: PhaseExit[];
 }
@@ -79,7 +87,7 @@ export interface ScriptProjection {
 /** Pumpenbefehle wie in script-edit.ts (2 „Pumpe an“ ist hier nie gelaufen → Marke). */
 const PUMP = new Set([3, 4, 5, 6]);
 const WAIT = new Set([12, 25, 26, 27]);
-const label = (cmd: number) => CMD_HELP[cmd]?.title ?? `Befehl ${cmd}`;
+const label = (cmd: number) => CMD_HELP[cmd]?.title ?? L(`Befehl ${cmd}`, `Command ${cmd}`);
 const num = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0));
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
@@ -197,6 +205,7 @@ function exitsOf(e: StepExit): PhaseExit[] {
   if (e.pressureBar != null) out.push({ kind: "pressureAbove", value: e.pressureBar });
   if (e.pressureBelowBar != null) out.push({ kind: "pressureBelow", value: e.pressureBelowBar });
   if (e.flowGs != null) out.push({ kind: "flowBelow", value: e.flowGs });
+  if (e.flowAboveGs != null) out.push({ kind: "flowAbove", value: e.flowAboveGs });
   if (e.seconds != null) out.push({ kind: "time", value: e.seconds });
   return out;
 }
@@ -206,12 +215,15 @@ export function projectSteps(steps: BrewStep[]): Phase[] {
     const base = {
       rampS: (s.rampMs ?? 0) / 1000, maxPressureBar: null, maxFlowGs: null, gentleness: null,
       name: s.name?.trim() ? s.name.trim() : null, exits: exitsOf(s.exit),
+      ...(s.tone ? { tone: true } : {}),
     };
     switch (s.kind) {
       case "flow": return { ...base, kind: "flow", target: s.targetFlowGs, maxPressureBar: s.maxPressureBar ?? null,
         ...(s.adoptFlow ? { adoptFlow: true } : {}) };
-      case "pressure": return { ...base, kind: "pressure", target: s.targetPressureBar, maxFlowGs: s.maxFlowGs ?? null };
-      case "preinfusion": return { ...base, kind: "preinfusion", target: null, rampS: 0, gentleness: s.gentleness ?? "normal" };
+      case "pressure": return { ...base, kind: "pressure", target: s.targetPressureBar, maxFlowGs: s.maxFlowGs ?? null,
+        ...(s.adoptPressure ? { adoptPressure: true } : {}) };
+      case "preinfusion": return { ...base, kind: "preinfusion", target: null, rampS: 0, gentleness: s.gentleness ?? "normal",
+        ...(s.fill === "fast" ? { fill: "fast" as const } : {}) };
       case "power": {
         const limits = { maxPressureBar: s.maxPressureBar ?? null, maxFlowGs: s.maxFlowGs ?? null };
         // Leistung 0 ohne Begrenzung ist eine Pause (Pumpe aus) — wie Cmd 6 im Skript.
@@ -247,18 +259,22 @@ export function laufart(phases: Phase[], markers: Pick<ScriptMarker, "label">[] 
   const app: string[] = [];
   const script: string[] = [];
   phases.forEach((p, i) => {
-    const n = `Phase ${i + 1}`;
-    if (p.kind === "flow") app.push(`Flussregelung in ${n}`);
-    if (p.kind === "preinfusion") app.push(`Preinfusion über den Zulauf in ${n}`);
-    if (p.maxPressureBar !== null || p.maxFlowGs !== null) app.push(`Begrenzung in ${n}`);
-    if (p.kind !== "preinfusion" && p.exits.length > 1) app.push(`mehrere Ausstiege in ${n}`);
+    // Endet auf „in Phase N“ bzw. „in stage N“ — das Frontend kuerzt die Gruende danach.
+    const n = L(`Phase ${i + 1}`, `stage ${i + 1}`);
+    if (p.kind === "flow") app.push(L(`Flussregelung in ${n}`, `flow control in ${n}`));
+    if (p.kind === "preinfusion") app.push(L(`Preinfusion über den Zulauf in ${n}`, `preinfusion via the inflow in ${n}`));
+    if (p.maxPressureBar !== null || p.maxFlowGs !== null) app.push(L(`Begrenzung in ${n}`, `limit in ${n}`));
+    if (p.adoptPressure) app.push(L(`Druck vom Puck in ${n}`, `pressure from the puck in ${n}`));
+    if (p.tone) app.push(L(`Ton am Phasenende in ${n}`, `tone at the stage end in ${n}`));
+    if (p.kind !== "preinfusion" && p.exits.length > 1) app.push(L(`mehrere Ausstiege in ${n}`, `several exits in ${n}`));
     for (const e of p.exits) {
-      if (e.kind === "pressureBelow") app.push(`Druck ≤ als Ausstieg in ${n}`);
-      if (e.kind === "flowBelow") app.push(`Fluss ≤ als Ausstieg in ${n}`);
-      if (e.kind === "tempAbove") script.push(`Warten bis °C in ${n}`);
+      if (e.kind === "pressureBelow") app.push(L(`Druck ≤ als Ausstieg in ${n}`, `pressure ≤ as exit in ${n}`));
+      if (e.kind === "flowBelow") app.push(L(`Fluss ≤ als Ausstieg in ${n}`, `flow ≤ as exit in ${n}`));
+      if (e.kind === "flowAbove") app.push(L(`Fluss ≥ als Ausstieg in ${n}`, `flow ≥ as exit in ${n}`));
+      if (e.kind === "tempAbove") script.push(L(`Warten bis °C in ${n}`, `wait until °C in ${n}`));
     }
   });
-  for (const m of markers) script.push(`Befehl „${m.label}“`);
+  for (const m of markers) script.push(L(`Befehl „${m.label}“`, `command “${m.label}”`));
   return { engine: app.length && script.length ? "conflict" : app.length ? "app" : "script", app, script };
 }
 
@@ -275,6 +291,7 @@ function exitOf(exits: PhaseExit[]): StepExit {
     if (x.kind === "pressureAbove") e.pressureBar = x.value;
     if (x.kind === "pressureBelow") e.pressureBelowBar = x.value;
     if (x.kind === "flowBelow") e.flowGs = x.value;
+    if (x.kind === "flowAbove") e.flowAboveGs = x.value;
     if (x.kind === "time") e.seconds = x.value;
   }
   return e;
@@ -283,7 +300,7 @@ function exitOf(exits: PhaseExit[]): StepExit {
 /** Eine Phase als App-Stufe. Preinfusion und Fluss sind nur in der App moeglich. */
 export function phaseToStep(p: Phase): BrewStep {
   const exit = exitOf(p.exits);
-  const named = p.name ? { name: p.name } : {};
+  const named = { ...(p.name ? { name: p.name } : {}), ...(p.tone ? { tone: true } : {}) };
   const ramp = p.rampS > 0 ? { rampMs: Math.round(p.rampS * 1000) } : {};
   switch (p.kind) {
     case "flow":
@@ -292,9 +309,11 @@ export function phaseToStep(p: Phase): BrewStep {
         ...(p.adoptFlow ? { adoptFlow: true } : {}) };
     case "pressure":
       return { kind: "pressure", ...named, targetPressureBar: p.target ?? 0, ...ramp, exit,
-        ...(p.maxFlowGs !== null ? { maxFlowGs: p.maxFlowGs } : {}) };
+        ...(p.maxFlowGs !== null ? { maxFlowGs: p.maxFlowGs } : {}),
+        ...(p.adoptPressure ? { adoptPressure: true } : {}) };
     case "preinfusion":
-      return { kind: "preinfusion", ...named, gentleness: p.gentleness ?? "normal", exit };
+      return { kind: "preinfusion", ...named, gentleness: p.gentleness ?? "normal", exit,
+        ...(p.fill === "fast" ? { fill: "fast" as const } : {}) };
     case "pause":
       return { kind: "power", ...named, power: 0, exit };
     case "power":
@@ -309,7 +328,7 @@ export function scriptToSteps(cmds: ParsedCmd[]): Converted<BrewStep[]> {
   const proj = projectScript(cmds);
   const reasons = laufart(proj.phases, proj.markers).script;
   proj.phases.forEach((p, i) => {
-    if (p.waitIndex === null) reasons.push(`Phase ${i + 1} hat kein Warten (läuft nie)`);
+    if (p.waitIndex === null) reasons.push(L(`Phase ${i + 1} hat kein Warten (läuft nie)`, `Stage ${i + 1} has no wait (never runs)`));
   });
   if (reasons.length > 0) return { ok: false, reasons };
   return { ok: true, value: proj.phases.map(phaseToStep) };
@@ -346,7 +365,7 @@ function waitCmd(e: PhaseExit): ParsedCmd {
 export function stepsToScript(steps: BrewStep[]): Converted<ParsedCmd[]> {
   const phases = projectSteps(steps);
   const reasons = [...laufart(phases).app];
-  if (phases.length === 0) reasons.push("keine Phase");
+  if (phases.length === 0) reasons.push(L("keine Phase", "no stage"));
   if (reasons.length > 0) return { ok: false, reasons };
   const last = phases.length - 1;
   const out: ParsedCmd[] = [makeCmd(1)];
@@ -414,7 +433,7 @@ export function setScriptPhaseExit(cmds: ParsedCmd[], i: number, exit: PhaseExit
   const p = projectScript(cmds).phases[i];
   if (!p) return cmds;
   if (exit === null) return p.waitIndex === null ? cmds : removeCmd(cmds, p.waitIndex);
-  if (exit.kind === "pressureBelow" || exit.kind === "flowBelow") return cmds; // nur App
+  if (exit.kind === "pressureBelow" || exit.kind === "flowBelow" || exit.kind === "flowAbove") return cmds; // nur App
   const next = waitCmd(exit);
   if (p.waitIndex === null) return insertCmd(cmds, p.range[1] + 1, next);
   const cur = cmds[p.waitIndex]!;
@@ -513,7 +532,10 @@ export function decideSave(a: {
   split?: boolean;
 }): SaveCase {
   if (a.after.engine === "conflict") {
-    return { kind: "blocked", reasons: [...a.after.app.map((r) => `nur App: ${r}`), ...a.after.script.map((r) => `nur Skript: ${r}`)] };
+    return { kind: "blocked", reasons: [
+      ...a.after.app.map((r) => L(`nur App: ${r}`, `app only: ${r}`)),
+      ...a.after.script.map((r) => L(`nur Skript: ${r}`, `script only: ${r}`)),
+    ] };
   }
   if (a.before.engine === "app") {
     // Bestehende App-Profile wechseln nie von selbst — nur, wenn die Kurve geaendert wurde.
@@ -552,7 +574,7 @@ export interface VariantSavePlan {
  */
 function curveKey(phases: Phase[]): string {
   return JSON.stringify(phases.map((p) => [p.kind, p.target, p.rampS, p.maxPressureBar, p.maxFlowGs, p.gentleness, p.exits,
-    ...(p.adoptFlow ? ["adopt"] : [])]));
+    ...(p.adoptFlow ? ["adopt"] : []), ...(p.adoptPressure ? ["adoptP"] : []), ...(p.fill === "fast" ? ["fillFast"] : [])]));
 }
 
 /**

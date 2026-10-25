@@ -87,6 +87,24 @@ It reads `DB_PATH` and `PORT` from the environment or from the service's
 (override with `XENIA_SERVICE=…`). Without a systemd service it stops after the
 build — restart the app yourself.
 
+### Keeping your own changes
+
+Commit your changes — the script keeps them and merges each update with them
+(a normal merge, your history is not rewritten). It first tries the merge
+without touching anything; if your changes conflict with the update, it names
+the files and stops, and nothing is changed. Merge by hand, commit, and run it
+again.
+
+To publish your changes, use a fork: `origin` is your fork, and the original
+is added as `upstream` — updates then come from there:
+
+```bash
+git remote add upstream https://github.com/fhold/xenia-web-app.git
+./update.sh
+```
+
+`XENIA_UPDATE_FROM=<remote>/<branch>` picks another source.
+
 ## Install as an app on Android (full screen)
 
 Browsers install a web app as a standalone app (own icon, no address bar) only when
@@ -138,8 +156,7 @@ cd backend && npm test
 
 This is a hobby project without any support promise. Bug reports and ideas are welcome
 as GitHub issues — please include your firmware version, your scale and what you did.
-Whether and when something gets fixed depends on my spare time. Pull requests are
-welcome too; by contributing you agree to license your changes under GPL-3.0.
+Whether and when something gets fixed depends on my spare time.
 
 ## License
 

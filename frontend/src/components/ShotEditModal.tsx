@@ -19,7 +19,7 @@ import { useBeans } from "../hooks/useBeans.js";
 import { useGrinders } from "../hooks/useGrinders.js";
 import { useBaskets, basketName } from "../hooks/useBaskets.js";
 import { BeanPicker } from "./BeanPicker.js";
-import { RatingModal } from "./RatingModal.js";
+import { RatingModal, ratingFacts } from "./RatingModal.js";
 import { ratingValuesToPatch } from "./RatingScreen.js";
 import { hasRating } from "@shared/shot-rating.js";
 import type { ShotRatingValues } from "./RatingScreen.js";
@@ -365,6 +365,7 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
           shotId={shot.id}
           initial={rv}
           headerLabel={basketName(baskets, shot.basketId) ?? (shot.shotSize === "single" ? "1×" : "2×")}
+          facts={ratingFacts(shot, shot.profileName, basketName(baskets, shot.basketId) ?? (shot.shotSize === "single" ? "1×" : "2×"))}
           cancelLabel={t("shotRating.cancel")}
           onSave={async (v) => {
             await onSave(ratingValuesToPatch(v));

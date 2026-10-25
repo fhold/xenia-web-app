@@ -29,7 +29,7 @@ import { useShotSamples } from "./hooks/useShotSamples.js";
 import { useLastBrewShot } from "./hooks/useLastBrewShot.js";
 import { useChartSettings } from "./hooks/useChartSettings.js";
 import { useBrewByWeightSettings } from "./hooks/useBrewByWeightSettings.js";
-import { Sidebar, STATE_CONFIG } from "./components/Sidebar.js";
+import { Sidebar, STATE_CONFIG, stateLabel } from "./components/Sidebar.js";
 import type { ViewId } from "./components/Sidebar.js";
 import { SetpointModal } from "./components/SetpointModal.js";
 import { MachineErrorLine } from "./components/MachineErrorLine.js";
@@ -37,7 +37,7 @@ import { PreShotDialog } from "./components/PreShotDialog.js";
 import { BackflushConfirmModal } from "./components/BackflushConfirmModal.js";
 import type { PreShotInitialValues, PreShotPayload, StartChoice } from "./components/PreShotDialog.js";
 import { startVariants, effectiveVariant, variantRunsInApp, variantForSlot } from "@shared/profile-slots.js";
-import { RatingModal } from "./components/RatingModal.js";
+import { RatingModal, ratingFacts } from "./components/RatingModal.js";
 import { ratingValuesToPatch } from "./components/RatingScreen.js";
 import { useStockAlert } from "./hooks/useStockAlert.js";
 import { useTranslation } from "./i18n/index.js";
@@ -46,7 +46,8 @@ import { Profiles } from "./views/Profiles.js";
 import { Settings } from "./views/Settings.js";
 import { Beans } from "./views/Beans.js";
 import { History } from "./views/History.js";
-import type { MachineState, Profile, RecentShot, Shot } from "@shared/types";
+import type { DriveStage, MachineState, Profile, RecentShot, Shot } from "@shared/types";
+import { installAudioUnlock, playAlertBeep, playPhaseTone } from "./tones.js";
 import theme, { alpha } from './theme';
 const C = theme;
 
@@ -86,34 +87,6 @@ async function startDrive(
 
 type GaugeTarget = "brewGroup" | "brewBoiler";
 
-/** Best-effort audible alert on the tablet (two short beeps) — used when a shot
- *  ends with a frozen scale. The machine can't beep mid-brew (tone is a script
- *  command), so we alert on the web app. Silent if audio is blocked. */
-function playAlertBeep(): void {
-  try {
-    const ctx = new AudioContext();
-    const beep = (offset: number, freq: number) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "square";
-      osc.frequency.value = freq;
-      const t0 = ctx.currentTime + offset;
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t0);
-      osc.stop(t0 + 0.2);
-    };
-    beep(0, 880);
-    beep(0.24, 620);
-    setTimeout(() => { void ctx.close(); }, 700);
-  } catch {
-    // Best-effort — the post-shot notice banner is the reliable signal.
-  }
-}
-
 /** True once any post-shot review field carries a value, i.e. the shot has been
  *  rated on some device. Drives reconnect reconciliation: if the tablet missed
  *  the shotUpdated broadcast while its socket was asleep, we detect the already-
@@ -144,7 +117,7 @@ function fmtRest(g: number | null): string {
 }
 
 export default function App() {
-  const { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev } = useXeniaFrame();
+  const { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev, driveStage } = useXeniaFrame();
   const { t } = useTranslation();
   const breakpoint = useBreakpoint();
   const control = useMachineControl();
@@ -177,6 +150,10 @@ export default function App() {
   // which shot was already offered, so skipping/saving doesn't re-open it.
   const [reviewShot, setReviewShot] = useState<Shot | null>(null);
   const reviewedShotIdRef = useRef<number | null>(null);
+  // Phasenton: nur das Geraet, das den App-Bezug gestartet hat, piept — wenn
+  // eine Stufe mit Ton endet, auch die letzte am Bezugsende.
+  const toneArmedRef = useRef(false);
+  const toneStageRef = useRef<DriveStage | null>(null);
   // Aufgebraucht-Hinweis fuer die Roestung des gerade bewerteten Bezugs.
   const stockAlert = useStockAlert(reviewShot?.beanId ?? null);
   // F-T6: bumped after a rating save so the dashboard refetches its recent
@@ -200,8 +177,8 @@ export default function App() {
   const openCoffee = useCallback((coffeeId: number) => {
     nav.go({ view: "beans", coffeeId });
   }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
-  const openProfile = useCallback((profileId: number) => {
-    nav.go({ view: "profiles", editor: profileId });
+  const openProfile = useCallback((profileId: number, variantId: number | null = null) => {
+    nav.go({ view: "profiles", editor: profileId, editorVariant: variantId });
   }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hauptmenue: neuer Eintrag (bei ungespeicherten Aenderungen erst fragen).
   const handleNavigate = useCallback((v: ViewId) => {
@@ -236,7 +213,7 @@ export default function App() {
     const ids = backflush.status?.profileIds ?? [];
     return profiles.find((p) => ids.includes(p.id)) ?? null;
   }, [backflush.status?.profileIds, profiles]);
-  const { scripts, syncScripts, refreshList: refreshScriptList, deleteScript, createScript, updateScript } = useScripts();
+  const { scripts, syncScripts, refreshList: refreshScriptList, refetch: refetchScripts, deleteScript, createScript, updateScript } = useScripts();
   const [scriptsSyncing, setScriptsSyncing] = useState(false);
   const handleEditorOpen = useCallback(() => {
     setScriptsSyncing(true);
@@ -306,11 +283,11 @@ export default function App() {
       const res = await fetch(`/api/shots/${shotId}/stop`, { method: "POST" });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!data.ok) {
-        control.reportError(data.error ?? `Bezug nicht gestoppt (HTTP ${res.status})`);
+        control.reportError(data.error ?? t("ui.stop.failedHttp", { status: res.status }));
       }
     } catch (err) {
       control.reportError(
-        `Bezug nicht gestoppt: ${err instanceof Error ? err.message : String(err)}`,
+        t("ui.stop.failed", { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }, [control]);
@@ -320,6 +297,15 @@ export default function App() {
   useEffect(() => {
     if (breakpoint !== "mobile") setDrawerOpen(false);
   }, [breakpoint]);
+
+  useEffect(() => installAudioUnlock(), []);
+
+  useEffect(() => {
+    const prev = toneStageRef.current;
+    toneStageRef.current = driveStage;
+    if (toneArmedRef.current && prev?.tone && driveStage?.index !== prev.index) playPhaseTone();
+    if (driveStage === null) toneArmedRef.current = false;
+  }, [driveStage]);
 
   // Auto-open the post-shot review once per newly ended shot (skippable).
   useEffect(() => {
@@ -523,7 +509,7 @@ export default function App() {
             {/* Hamburger — opens the navigation drawer */}
             <button
               onClick={() => { setDrawerOpen(true); }}
-              title="Menü"
+              title={t("ui.app.menu")}
               style={{
                 background: "transparent",
                 border: `1px solid ${C.bdr}`,
@@ -559,7 +545,7 @@ export default function App() {
                   letterSpacing: "0.08em",
                 }}
               >
-                {stateConf.label}
+                {stateLabel(displayState)}
               </span>
             </div>
 
@@ -569,7 +555,7 @@ export default function App() {
                 onClick={() => {
                   if (activeShot) void stopShot(activeShot.id);
                 }}
-                title="Bezug stoppen"
+                title={t("ui.stop.title")}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -598,14 +584,14 @@ export default function App() {
                   }}
                 />
                 <Octagon size={14} strokeWidth={2.2} />
-                Stoppen
+                {t("ui.stop.button")}
               </button>
             ) : (
               <div style={{ display: "flex", gap: 4 }}>
                 <button
                   onClick={() => { void control.setPower(isMachineOff); }}
                   disabled={controlDisabled && !isMachineOff}
-                  title={stateConf.label}
+                  title={stateLabel(displayState)}
                   style={{
                     background: isMachineOff ? C.dimG
                       : displayState === "heating" ? C.redD
@@ -624,7 +610,7 @@ export default function App() {
                 <button
                   onClick={() => { void control.setSteam(!steamOn); }}
                   disabled={controlDisabled || isMachineOff}
-                  title={steamOn ? "Hot" : "Cold"}
+                  title={steamOn ? t("ui.machine.steamHot") : t("ui.machine.steamCold")}
                   style={{
                     background: steamOn ? C.redD : C.bluD,
                     border: `1px solid ${steamOn ? C.red : C.blu}30`,
@@ -692,6 +678,8 @@ export default function App() {
                 activeShot={activeShot}
                 lastEndedShot={dashboardShot}
                 restoredShot={lastEndedShot === null && restoredShot !== null}
+                profiles={profiles}
+                driveStage={driveStage}
                 maintenance={maintenance}
                 maintenanceDone={
                   maintenanceDone !== null &&
@@ -737,8 +725,9 @@ export default function App() {
                 onOpenHistoryWith={openHistoryWith}
                 onOpenCoffee={openCoffee}
                 onDeleteScript={deleteScript}
-                scriptActions={{ createScript, updateScript, deleteScript }}
+                scriptActions={{ createScript, updateScript, deleteScript, refetch: refetchScripts }}
                 editorId={loc.editor ?? null}
+                editorVariantId={loc.editorVariant ?? null}
                 onOpenEditor={(id) => nav.go({ view: "profiles", editor: id })}
                 onCloseEditor={() => nav.back({ view: "profiles" }, { force: true })}
               />
@@ -798,7 +787,7 @@ export default function App() {
                   textAlign: "center",
                 }}
               >
-                Coming soon
+                {t("ui.app.comingSoon")}
               </div>
             )}
           </div>
@@ -858,7 +847,9 @@ export default function App() {
             onStart={async (payload, choice) => {
               // Die Variante entscheidet: Stufen laufen im App-Antrieb, ein Skript
               // an der Maschine. Gilt fuer JEDEN Einstieg (Wiederholen, Chip, Liste).
-              const err = variantRunsInApp(preShot.profile, choice.variant)
+              const inApp = variantRunsInApp(preShot.profile, choice.variant);
+              toneArmedRef.current = inApp;
+              const err = inApp
                 ? await startDrive(preShot.profile.id, choice, payload)
                 : await shotExecute.execute({
                     profileId: preShot.profile.id,
@@ -871,10 +862,12 @@ export default function App() {
               // brew is visible — regardless of which view the start came from
               // (History row-↻, History detail, Profiles 1×/2×, fav chip, …).
               if (!err) toDashboard();
+              else toneArmedRef.current = false;
               return err;
             }}
             onClose={() => { setPreShot(null); }}
             liveBgTempC={frame?.brewGroupTempC ?? null}
+            liveScaleG={frame?.scaleWeightG ?? null}
             currentBgSetpointC={setpoints?.brewGroupTargetC ?? null}
             currentBbSetpointC={setpoints?.brewBoilerTargetC ?? null}
             onSetFromProfile={async (targetTempC) => { await control.setSetpointsFromProfile(targetTempC); }}
@@ -929,6 +922,11 @@ export default function App() {
               vsPrev: reviewShot.vsPrev ?? null,
               vsPrevShotId: reviewShot.vsPrevShotId ?? null,
             }}
+            facts={ratingFacts(
+              reviewShot,
+              profiles.find((p) => p.id === reviewShot.profileId)?.name ?? null,
+              basketName(baskets, reviewShot.basketId) ?? (reviewShot.shotSize === "single" ? "1×" : "2×"),
+            )}
             headerLabel={
               `${basketName(baskets, reviewShot.basketId) ?? (reviewShot.shotSize === "single" ? "1×" : "2×")}` +
               (reviewShot.yieldActualG !== null ? ` · ${reviewShot.yieldActualG.toFixed(1)} g` : "") +
@@ -981,7 +979,7 @@ export default function App() {
               // input is gone with it and the shot cannot be rated again.
               if (!res.ok) {
                 const body = (await res.json().catch(() => ({}))) as { error?: string };
-                throw new Error(body.error ?? `Bewertung nicht gespeichert (HTTP ${res.status})`);
+                throw new Error(body.error ?? t("ui.app.ratingSaveFailed", { status: res.status }));
               }
               // F-T6: refetch recent shots so the new rating shows immediately.
               setRecentRefreshKey((k) => k + 1);

@@ -7,11 +7,11 @@
  */
 
 import { useMemo, useState } from "react";
-import { X, Pencil, Trash2, Repeat, Star, Maximize, Minimize } from "lucide-react";
+import { X, Pencil, Trash2, Repeat, Star, Maximize, Minimize, ArrowLeftRight } from "lucide-react";
 import { ShotChart } from "./ShotChart.js";
 import { useShotGhosts } from "../hooks/useShotGhosts.js";
 import { RatingDots } from "./RatingDots.js";
-import { RatingModal } from "./RatingModal.js";
+import { RatingModal, ratingFacts } from "./RatingModal.js";
 import { ratingValuesToPatch } from "./RatingScreen.js";
 import { hasRating, extractionMarks } from "@shared/shot-rating.js";
 import type { ShotRatingValues } from "./RatingScreen.js";
@@ -127,11 +127,13 @@ interface ShotDetailModalProps {
   repeatBlocked?: boolean;
   /** Flag/move (or clear) the Best-Brew reference. Only shown for brew shots. */
   onToggleBest?: (shot: ShotListItem, makeBest: boolean) => void;
-  /** Klick auf den Profilnamen: dieses Profil im Editor öffnen. */
-  onOpenProfile?: (profileId: number) => void;
+  /** Klick auf den Profilnamen: dieses Profil im Editor öffnen — in der Variante des Bezugs. */
+  onOpenProfile?: (profileId: number, variantId: number | null) => void;
+  /** Bezuege vergleichen: diesen als A nehmen, den zweiten in der Historie waehlen. */
+  onCompare?: (shot: ShotListItem) => void;
 }
 
-export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpdate, onRepeat, repeatBlocked, onToggleBest, onOpenProfile }: ShotDetailModalProps) {
+export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpdate, onRepeat, repeatBlocked, onToggleBest, onOpenProfile, onCompare }: ShotDetailModalProps) {
   const { t, lang } = useTranslation();
   const breakpoint = useBreakpoint();
   const isDesktop = breakpoint === "desktop";
@@ -380,7 +382,12 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
         : scriptContent
           ? scriptStageStrip(scriptContent, brewEndS, stop)
           : null;
-    return strip ? { strip, firstDropS: firstDropS(chartSamples) } : null;
+    // Nachlauf: nach dem Pumpenstopp laeuft die Aufzeichnung weiter, es tropft nach.
+    const lastT = chartSamples.length > 0 ? chartSamples[chartSamples.length - 1].t : brewEndS;
+    const wAt = (tS: number) => { let w: number | null = null; for (const c of chartSamples) if (c.t <= tS && c.weight !== null) w = c.weight; return w; };
+    const wEnd = wAt(brewEndS), wLast = wAt(lastT);
+    const tail = lastT > brewEndS ? { endS: lastT, gainG: wEnd !== null && wLast !== null ? wLast - wEnd : null } : null;
+    return strip ? { strip, firstDropS: firstDropS(chartSamples), tail } : null;
   }, [samples, chartSamples, stages, brewSteps, scriptContent, shot.stopMode, shot.yieldTargetG]);
 
   // Averages + peak weight across the recorded samples.
@@ -413,6 +420,74 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
   const locale = lang === "de" ? "de-DE" : "en-US";
 
   const hasNotes = shot.notes !== null && shot.notes.trim() !== "";
+
+  // Umschalter der Kurven — im Fenster und im Vollbild dieselben (Flavio 22.10.).
+  const toggles = (
+    <>
+                  <button
+                    onClick={() => setGhostToggled(!showGhosts)}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
+                      fontSize: 11, fontWeight: 600,
+                      background: showGhosts ? C.accG2 : "transparent",
+                      border: `1px solid ${showGhosts ? C.accB : C.bdr2}`,
+                      color: showGhosts ? C.acc : C.mut,
+                    }}
+                  >
+                    <span style={{ width: 12, height: 0, borderTop: `2px solid ${showGhosts ? C.acc : C.mut}`, opacity: 0.5 }} />
+                    {t("history.detailModal.ghostToggle")}
+                  </button>
+                  {hasStageData && (
+                    <button
+                      onClick={() => setStageToggled(!showStages)}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
+                        fontSize: 11, fontWeight: 600,
+                        background: showStages ? alpha(C.seriesTarget, 0.14) : "transparent",
+                        border: `1px solid ${showStages ? alpha(C.seriesTarget, 0.4) : C.bdr2}`,
+                        color: showStages ? C.seriesTarget : C.mut,
+                      }}
+                    >
+                      <span style={{ width: 12, height: 0, borderTop: `2px dashed ${showStages ? C.seriesTarget : C.mut}` }} />
+                      {t("history.detailModal.stageToggle")}
+                    </button>
+                  )}
+                  {hasPumpData && (
+                    <button
+                      onClick={() => setPumpToggled(!showPump)}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
+                        fontSize: 11, fontWeight: 600,
+                        background: showPump ? C.orgD : "transparent",
+                        border: `1px solid ${showPump ? alpha(C.seriesPower, 0.4) : C.bdr2}`,
+                        color: showPump ? C.seriesPower : C.mut,
+                      }}
+                    >
+                      <span style={{ width: 12, height: 0, borderTop: `2px solid ${showPump ? C.seriesPower : C.mut}` }} />
+                      {t("history.detailModal.pumpToggle")}
+                    </button>
+                  )}
+                  {scriptContent !== null && (
+                    <button
+                      onClick={() => setUserToggled(!showOverlay)}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
+                        fontSize: 11, fontWeight: 600,
+                        background: showOverlay ? C.accG2 : "transparent",
+                        border: `1px solid ${showOverlay ? C.accB : C.bdr2}`,
+                        color: showOverlay ? C.acc : C.mut,
+                      }}
+                    >
+                      <span style={{ width: 12, height: 0, borderTop: `2px dashed ${showOverlay ? C.acc : C.mut}` }} />
+                      {t("history.detailModal.overlayToggle")}
+                    </button>
+                  )}
+    </>
+  );
 
   // One chart definition for both places — inline in the modal and fullscreen.
   const renderChart = (full: boolean) => (
@@ -510,7 +585,7 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               {onOpenProfile && shot.profileId !== null ? (
                 <button
-                  onClick={() => { if (shot.profileId !== null) onOpenProfile(shot.profileId); }}
+                  onClick={() => { if (shot.profileId !== null) onOpenProfile(shot.profileId, shot.variantId ?? null); }}
                   onMouseEnter={() => setNameHover(true)}
                   onMouseLeave={() => setNameHover(false)}
                   title={t("history.detailModal.openProfile")}
@@ -551,6 +626,11 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
               <Repeat size={16} />
             </button>
           )}
+          {onCompare && (
+            <button onClick={() => onCompare(shot)} title={t("history.compare.action")} style={iconBtn}>
+              <ArrowLeftRight size={16} />
+            </button>
+          )}
           <button
             onClick={() => onEdit(shot)}
             title={t("history.edit")}
@@ -586,68 +666,7 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
                   write): measured pump-power curve + SO-1 commanded Soll overlay.
                   Each shown only when its data is available. */}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 4 }}>
-                  <button
-                    onClick={() => setGhostToggled(!showGhosts)}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 6,
-                      padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
-                      fontSize: 11, fontWeight: 600,
-                      background: showGhosts ? C.accG2 : "transparent",
-                      border: `1px solid ${showGhosts ? C.accB : C.bdr2}`,
-                      color: showGhosts ? C.acc : C.mut,
-                    }}
-                  >
-                    <span style={{ width: 12, height: 0, borderTop: `2px solid ${showGhosts ? C.acc : C.mut}`, opacity: 0.5 }} />
-                    {t("history.detailModal.ghostToggle")}
-                  </button>
-                  {hasStageData && (
-                    <button
-                      onClick={() => setStageToggled(!showStages)}
-                      style={{
-                        display: "inline-flex", alignItems: "center", gap: 6,
-                        padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
-                        fontSize: 11, fontWeight: 600,
-                        background: showStages ? alpha(C.seriesTarget, 0.14) : "transparent",
-                        border: `1px solid ${showStages ? alpha(C.seriesTarget, 0.4) : C.bdr2}`,
-                        color: showStages ? C.seriesTarget : C.mut,
-                      }}
-                    >
-                      <span style={{ width: 12, height: 0, borderTop: `2px dashed ${showStages ? C.seriesTarget : C.mut}` }} />
-                      {t("history.detailModal.stageToggle")}
-                    </button>
-                  )}
-                  {hasPumpData && (
-                    <button
-                      onClick={() => setPumpToggled(!showPump)}
-                      style={{
-                        display: "inline-flex", alignItems: "center", gap: 6,
-                        padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
-                        fontSize: 11, fontWeight: 600,
-                        background: showPump ? C.orgD : "transparent",
-                        border: `1px solid ${showPump ? alpha(C.seriesPower, 0.4) : C.bdr2}`,
-                        color: showPump ? C.seriesPower : C.mut,
-                      }}
-                    >
-                      <span style={{ width: 12, height: 0, borderTop: `2px solid ${showPump ? C.seriesPower : C.mut}` }} />
-                      {t("history.detailModal.pumpToggle")}
-                    </button>
-                  )}
-                  {scriptContent !== null && (
-                    <button
-                      onClick={() => setUserToggled(!showOverlay)}
-                      style={{
-                        display: "inline-flex", alignItems: "center", gap: 6,
-                        padding: "4px 10px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
-                        fontSize: 11, fontWeight: 600,
-                        background: showOverlay ? C.accG2 : "transparent",
-                        border: `1px solid ${showOverlay ? C.accB : C.bdr2}`,
-                        color: showOverlay ? C.acc : C.mut,
-                      }}
-                    >
-                      <span style={{ width: 12, height: 0, borderTop: `2px dashed ${showOverlay ? C.acc : C.mut}` }} />
-                      {t("history.detailModal.overlayToggle")}
-                    </button>
-                  )}
+                  {toggles}
                   <button
                     onClick={() => setFullscreen(true)}
                     title={t("history.detailModal.fullscreen")}
@@ -928,6 +947,7 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
             <span style={{ fontSize: 11, color: C.mut, flex: 1 }}>
               {formatDateTime(shot.startedAt, locale)}
             </span>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", alignSelf: "center" }}>{toggles}</div>
             <button
               onClick={() => { setFullscreen(false); }}
               title={t("history.detailModal.fullscreenExit")}
@@ -946,6 +966,7 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
         shotId={shot.id}
         initial={rv}
         headerLabel={sizeLabel}
+        facts={ratingFacts(shot, shot.profileName, sizeLabel)}
         mobile={mobile}
         cancelLabel={t("shotRating.cancel")}
         onSave={async (v) => { await onUpdate(ratingValuesToPatch(v)); setRv(v); }}

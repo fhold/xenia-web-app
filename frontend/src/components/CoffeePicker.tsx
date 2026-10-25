@@ -97,7 +97,7 @@ export function CoffeePicker({ title, hint, confirmLabel, queryName, queryRoaste
                     color: s.verdict === "sicher" ? C.grn : C.org,
                     background: s.verdict === "sicher" ? C.grnD : C.orgD,
                     border: `1px solid ${s.verdict === "sicher" ? C.grn : C.org}40`,
-                  }}>{s.verdict}</span>
+                  }}>{s.verdict === "sicher" ? t("ui.coffeeMatch.sure") : t("ui.coffeeMatch.unclear")}</span>
                   {selected === s.coffeeId && <Check size={16} color={C.acc} />}
                 </button>
               ))}

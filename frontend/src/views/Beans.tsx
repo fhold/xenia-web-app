@@ -70,8 +70,9 @@ function TypeChip({ brewType }: { brewType: Coffee["brewType"] }) {
 }
 
 function StarBtn({ on, onClick, size = 30 }: { on: boolean; onClick: (e: React.MouseEvent) => void; size?: number }) {
+  const { t } = useTranslation();
   return (
-    <button onClick={onClick} aria-label="Favorit"
+    <button onClick={onClick} aria-label={t("beans.favourite")}
       style={{
         width: size, height: size, borderRadius: 9, flexShrink: 0, display: "flex", alignItems: "center",
         justifyContent: "center", cursor: "pointer", transition: ".15s",
@@ -90,9 +91,10 @@ function VerdictGlyph({ rating }: { rating: BeanRating | null }) {
 }
 
 function AgeView({ days, frozen }: { days: number | null; frozen: boolean }) {
+  const { t } = useTranslation();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: MONO, fontSize: 15, color: C.txt, lineHeight: 1, whiteSpace: "nowrap" }}>
-      {days !== null ? <>{days}<small style={{ fontSize: 11, color: C.mut, marginLeft: 3, fontWeight: 400 }}>Tage</small></> : <span style={{ color: C.mut }}>—</span>}
+      {days !== null ? <>{days}<small style={{ fontSize: 11, color: C.mut, marginLeft: 3, fontWeight: 400 }}>{t("coffee.days")}</small></> : <span style={{ color: C.mut }}>—</span>}
       {frozen && <span style={{ display: "inline-flex", color: C.blu }}><Snowflake size={13} /></span>}
     </div>
   );
@@ -606,7 +608,7 @@ function RoastingRow({ r, onOpenHistory, onKebab }: {
           <div style={{ ...subLine, marginTop: 4 }}>{dots(usage)}{frozenSince}</div>
         )}
       </div>
-      <button onClick={(e) => { e.stopPropagation(); onKebab(r); }} aria-label="Aktionen"
+      <button onClick={(e) => { e.stopPropagation(); onKebab(r); }} aria-label={t("ui.beans.actions")}
         style={{ width: 34, height: 42, borderRadius: 9, border: "1px solid transparent", background: "transparent", color: C.mut, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
         onMouseEnter={(e) => { e.currentTarget.style.background = C.bg; e.currentTarget.style.color = C.txt; e.currentTarget.style.borderColor = C.bdr; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.mut; e.currentTarget.style.borderColor = "transparent"; }}>
@@ -986,7 +988,7 @@ export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectI
     try { await api.deleteCoffee(c.id); onSelectId(null); } catch (e) { window.alert(e instanceof Error ? e.message : String(e)); }
   }
 
-  if (loading) return <div style={{ color: C.mut, fontSize: 13, textAlign: "center", padding: 40 }}>Lade…</div>;
+  if (loading) return <div style={{ color: C.mut, fontSize: 13, textAlign: "center", padding: 40 }}>{t("ui.common.loading")}</div>;
   if (error) return <div style={{ color: C.red, fontSize: 13, textAlign: "center", padding: 40 }}>{error}</div>;
 
   const detail = selected && (

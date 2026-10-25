@@ -15,7 +15,7 @@
  * ghosts would have to slide with the moving x-window on every frame.
  */
 
-import { memo } from "react";
+import { memo, useId } from "react";
 import type { ShotGhosts } from "../hooks/useShotGhosts.js";
 
 /** Per-line alpha. A single ghost stays a hint, twenty make a cloud — but it has
@@ -27,6 +27,8 @@ const GHOST_WIDTH = 1;
 interface InjectedChartProps {
   xAxisMap?: Record<string, { scale?: (v: number) => number }>;
   yAxisMap?: Record<string, { scale?: (v: number) => number }>;
+  /** Plot area — ghosts longer than the current shot end at the axis, not past it. */
+  offset?: { left: number; top: number; width: number; height: number };
 }
 
 interface ShotGhostLayerProps extends InjectedChartProps {
@@ -72,13 +74,22 @@ function ShotGhostLayerInner({
   flowColor,
   xAxisMap,
   yAxisMap,
+  offset,
 }: ShotGhostLayerProps) {
+  const clipId = `ghost-clip-${useId().replace(/:/g, "")}`;
   const xScale = xAxisMap?.["0"]?.scale;
   const yScale = yAxisMap?.["main"]?.scale;
   if (!ghosts || ghosts.shots.length === 0 || !xScale || !yScale) return null;
 
   return (
-    <g pointerEvents="none">
+    <g pointerEvents="none" clipPath={offset ? `url(#${clipId})` : undefined}>
+      {offset && (
+        <defs>
+          <clipPath id={clipId}>
+            <rect x={offset.left} y={offset.top} width={offset.width} height={offset.height} />
+          </clipPath>
+        </defs>
+      )}
       {ghosts.shots.map((g) => {
         const dPressure = buildPaths(g.pressure, ghosts.gridMs, xScale, yScale);
         const dFlow = buildPaths(g.flow, ghosts.gridMs, xScale, yScale);

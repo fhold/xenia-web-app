@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  DriveStage,
   LiveFrame,
   MachineState,
   MaintenanceRun,
@@ -41,6 +42,8 @@ export interface XeniaState {
    *  event). Consumers refetch GET /api/profiles so a profile created on the PC
    *  appears on the tablet without a manual tab focus. 0 = no change yet. */
   profilesRev: number;
+  /** Aktuelle Stufe des laufenden App-Bezugs (driveStage WS-Event); null nach dem Bezug. */
+  driveStage: DriveStage | null;
 }
 
 // Reconnect backoff: 1s → 2s → 4s → ... → 30s max
@@ -69,6 +72,7 @@ export function useXeniaFrame(): XeniaState {
   const [maintenanceDone, setMaintenanceDone] = useState<MaintenanceRun | null>(null);
   const maintenanceRef = useRef<MaintenanceRun | null>(null);
   const [profilesRev, setProfilesRev] = useState(0);
+  const [driveStage, setDriveStage] = useState<DriveStage | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(BACKOFF_BASE_MS);
@@ -119,6 +123,7 @@ export function useXeniaFrame(): XeniaState {
             break;
           case "shotEnded":
             setActiveShot(null);
+            setDriveStage(null);
             setLastEndedShot(msg.data);
             break;
           case "shotUpdated":
@@ -136,6 +141,9 @@ export function useXeniaFrame(): XeniaState {
             break;
           case "profilesChanged":
             setProfilesRev((n) => n + 1);
+            break;
+          case "driveStage":
+            setDriveStage(msg.data);
             break;
           case "machineInfo":
           case "error":
@@ -176,5 +184,5 @@ export function useXeniaFrame(): XeniaState {
 
   const dismissMaintenanceDone = useCallback(() => { setMaintenanceDone(null); }, []);
 
-  return { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev };
+  return { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev, driveStage };
 }

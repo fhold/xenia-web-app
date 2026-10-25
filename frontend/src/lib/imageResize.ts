@@ -11,6 +11,8 @@
  * Hochladen, wenn die Information schon weg ist.
  */
 
+import { t } from "../i18n/index.js";
+
 /** Laengste Kante nach dem Verkleinern. */
 const MAX_EDGE = 1280;
 const JPEG_QUALITY = 0.82;
@@ -48,7 +50,7 @@ export async function resizeForUpload(file: File): Promise<ResizedImage> {
   const src = await loadBitmap(file);
   const sw = "width" in src ? src.width : 0;
   const sh = "height" in src ? src.height : 0;
-  if (!sw || !sh) throw new Error("Bild konnte nicht gelesen werden");
+  if (!sw || !sh) throw new Error(t("ui.image.readFailed"));
 
   const scale = Math.min(1, MAX_EDGE / Math.max(sw, sh));
   const w = Math.max(1, Math.round(sw * scale));
@@ -58,14 +60,14 @@ export async function resizeForUpload(file: File): Promise<ResizedImage> {
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas nicht verfügbar");
+  if (!ctx) throw new Error(t("ui.image.noCanvas"));
   ctx.drawImage(src as CanvasImageSource, 0, 0, w, h);
   if ("close" in src) src.close();
 
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY);
   });
-  if (!blob) throw new Error("Bild konnte nicht kodiert werden");
+  if (!blob) throw new Error(t("ui.image.encodeFailed"));
 
   const buf = await blob.arrayBuffer();
   let binary = "";

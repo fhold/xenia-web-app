@@ -12,7 +12,7 @@
  * never collide.
  *
  * Step JSON is hashed in canonical form (`canonicalBrewDef`): only what decides
- * the brew counts. The freetext phase names do not — renaming "Füllen" to
+ * the brew counts. The freetext phase names and the tablet tone do not — renaming "Füllen" to
  * "Preinfusion" used to mint a new profile version and split the ghost cloud
  * (idea taken from decaid, 2026-09-26). Key order is sorted for the same
  * reason. The stored `content` is the canonical form; the shot keeps its own
@@ -29,7 +29,7 @@ export function brewDefHash(kind: BrewDefKind, content: string): string {
 }
 
 /** Keys whose value does not change what the machine does. */
-const NON_EXECUTING_STEP_KEYS = new Set(["name"]);
+const NON_EXECUTING_STEP_KEYS = new Set(["name", "tone"]);
 
 function sortKeys(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(sortKeys);
@@ -41,7 +41,7 @@ function sortKeys(v: unknown): unknown {
 
 /**
  * The part of a definition that decides the brew. Scripts pass through
- * unchanged; step JSON loses the phase names and gets sorted keys.
+ * unchanged; step JSON loses the phase names and tones and gets sorted keys.
  */
 export function canonicalBrewDef(kind: BrewDefKind, content: string): string {
   if (kind === "script") return content;

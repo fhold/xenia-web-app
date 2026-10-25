@@ -13,10 +13,34 @@ import { RatingScreen } from "./RatingScreen.js";
 import type { ShotRatingValues } from "./RatingScreen.js";
 import type { ShotCompare } from "@shared/types";
 import { useTranslation } from "../i18n/index.js";
+import { useRatingFieldSettings } from "../hooks/useRatingFieldSettings.js";
 import theme, { alpha } from "../theme.js";
 
 const C = theme;
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
+
+/** Kennzahlen des Bezugs fuer den Kopf — wie im Dashboard nach dem Bezug. */
+export interface RatingFacts {
+  id: number;
+  profileName: string | null;
+  basket: string | null;
+  doseG: number | null;
+  yieldG: number | null;
+  targetG: number | null;
+  durationMs: number | null;
+}
+
+/** Aus einem Bezug (Shot oder Historienzeile) die Kennzahlen fuer den Kopf. */
+export function ratingFacts(
+  s: { id: number; doseG: number | null; yieldActualG: number | null; yieldTargetG: number | null; startedAt: number; endedAt: number | null },
+  profileName: string | null,
+  basket: string | null,
+): RatingFacts {
+  return {
+    id: s.id, profileName, basket, doseG: s.doseG, yieldG: s.yieldActualG, targetG: s.yieldTargetG,
+    durationMs: s.endedAt !== null ? s.endedAt - s.startedAt : null,
+  };
+}
 
 interface RatingModalProps {
   /** Der bewertete Bezug — fuer den Vergleich mit dem letzten Bezug derselben Sorte. */
@@ -24,6 +48,8 @@ interface RatingModalProps {
   initial: ShotRatingValues;
   /** Small mono label shown right of the title, e.g. "1× · 24.6 g". */
   headerLabel?: string;
+  /** Kennzahlen im Kopf (Einstellung „Kennzahlen“); ersetzen dann headerLabel. */
+  facts?: RatingFacts | null;
   mobile?: boolean;
   /** Cancel/skip label — "Überspringen" (post-brew) or "Abbrechen" (re-rate). */
   cancelLabel?: string;
@@ -58,8 +84,26 @@ interface RatingModalProps {
   onClose: () => void;
 }
 
-export function RatingModal({ shotId, initial, headerLabel, mobile = false, cancelLabel, notice, resetPrompt, stockPrompt, onSave, onClose }: RatingModalProps) {
-  const { t } = useTranslation();
+export function RatingModal({ shotId, initial, headerLabel, facts = null, mobile = false, cancelLabel, notice, resetPrompt, stockPrompt, onSave, onClose }: RatingModalProps) {
+  const { t, lang } = useTranslation();
+  const fields = useRatingFieldSettings();
+  const num = (v: number, d: number) => (lang === "de" ? v.toFixed(d).replace(".", ",") : v.toFixed(d));
+  const grams = (v: number) => (Number.isInteger(v) ? String(v) : num(v, 1));
+  // Kopfzeile: #id · Profil · Sieb · Dosis → Ausbeute (Ziel) · Ratio · Zeit
+  const factsLine = fields.facts && facts
+    ? [
+        `#${facts.id}`,
+        facts.profileName,
+        facts.basket,
+        facts.yieldG !== null
+          ? `${facts.doseG !== null ? `${grams(facts.doseG)} → ` : ""}${num(facts.yieldG, 1)} g${facts.targetG !== null ? ` (${grams(facts.targetG)})` : ""}`
+          : null,
+        facts.doseG && facts.yieldG !== null ? `1:${num(facts.yieldG / facts.doseG, 1)}` : null,
+        facts.durationMs !== null
+          ? `${Math.floor(facts.durationMs / 60000)}:${String(Math.floor(facts.durationMs / 1000) % 60).padStart(2, "0")}`
+          : null,
+      ].filter(Boolean).join(" · ")
+    : null;
   const [values, setValues] = useState<ShotRatingValues>(initial);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -138,12 +182,14 @@ export function RatingModal({ shotId, initial, headerLabel, mobile = false, canc
       >
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 10, rowGap: 2 }}>
             <span style={{ fontSize: 15, fontWeight: 600, color: C.txt }}>
               {t("shotRating.title")}
             </span>
-            {headerLabel && (
-              <span style={{ ...MONO, fontSize: 12, color: C.mut, marginLeft: 8 }}>{headerLabel}</span>
+            {factsLine ? (
+              <span style={{ ...MONO, fontSize: 12, color: C.mut, minWidth: 0 }}>{factsLine}</span>
+            ) : headerLabel && (
+              <span style={{ ...MONO, fontSize: 12, color: C.mut }}>{headerLabel}</span>
             )}
           </div>
           <button
@@ -293,7 +339,7 @@ export function RatingModal({ shotId, initial, headerLabel, mobile = false, canc
           </div>
         )}
 
-        <RatingScreen initial={values} onChange={setValues} mobile={mobile} compareTo={compareTo} />
+        <RatingScreen initial={values} onChange={setValues} mobile={mobile} compareTo={compareTo} fields={fields} />
 
         {saveError !== null && (
           <div

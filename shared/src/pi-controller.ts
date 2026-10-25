@@ -106,6 +106,18 @@ export class PIController implements FlowController {
   }
 
   /**
+   * Arbeitspunkt verschieben (Vorsteuerung): der Ausgang bei Fehler null wandert um
+   * `delta` (%). Sonst muesste der I-Anteil die Aenderung ueber einen bleibenden
+   * Fehler nachholen — bei einer Rampe ist das der Nachlauf (Steigung / ki).
+   * Begrenzt wie der Ausgang, damit nichts gegen den Anschlag aufzieht.
+   */
+  shift(delta: number): void {
+    if (this.cfg.ki === 0) return;
+    const operatingPoint = clamp(this.cfg.ki * this.integral + delta, this.cfg.outMin, this.cfg.outMax);
+    this.integral = operatingPoint / this.cfg.ki;
+  }
+
+  /**
    * Advance the controller by one step.
    * @param measured raw process value (flow, g/s)
    * @param dtMs     elapsed time since the previous update (ms)

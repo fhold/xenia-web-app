@@ -379,7 +379,7 @@ export function CoffeeEditor({ coffee, onSave, onClose, match, onJumpToCoffee }:
                   <div style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     <span style={{ fontSize: 13, color: C.txt, fontWeight: 600 }}>{d.name}</span>
                     {d.roaster && <span style={{ fontSize: 12, color: C.mut }}> · {d.roaster}</span>}
-                    <span style={{ fontSize: 10, color: d.verdict === "sicher" ? C.grn : C.org, marginLeft: 6 }}>{d.verdict}</span>
+                    <span style={{ fontSize: 10, color: d.verdict === "sicher" ? C.grn : C.org, marginLeft: 6 }}>{d.verdict === "sicher" ? t("ui.coffeeMatch.sure") : t("ui.coffeeMatch.unclear")}</span>
                   </div>
                   {onJumpToCoffee && (
                     <button type="button" onClick={() => onJumpToCoffee(d.coffeeId)}

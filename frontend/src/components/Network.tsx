@@ -21,22 +21,23 @@ import { startVariants } from "@shared/profile-slots.js";
 import type { ShotFilters } from "../hooks/useShots.js";
 import { useBaskets } from "../hooks/useBaskets.js";
 import { useGrinders } from "../hooks/useGrinders.js";
-import { useTranslation } from "../i18n/index.js";
+import { t, useTranslation } from "../i18n/index.js";
 import { formatDay } from "../lib/dates.js";
 import theme from "../theme.js";
+import { dec } from "../lib/num.js";
 
 const C = theme;
 const MONO = "'JetBrains Mono', monospace";
 
-const num = (v: number) => String(Math.round(v * 10) / 10).replace(".", ",");
+const num = (v: number) => dec(String(Math.round(v * 10) / 10));
 const range = (a: number | null, b: number | null) => (a === null || b === null ? "–" : a === b ? num(a) : `${num(a)}–${num(b)}`);
 const day = (ms: number) => formatDay(ms, { style: "numeric" });
 
-const CHAN: Record<NetChanneling, { word: string; color: string }> = {
-  none: { word: "keins", color: C.mut },
-  light: { word: "leicht", color: C.org },
-  strong: { word: "stark", color: C.red },
-  yes: { word: "ja", color: C.org },
+const CHAN: Record<NetChanneling, { word: () => string; color: string }> = {
+  none: { word: () => t("profileList.network.chan.none"), color: C.mut },
+  light: { word: () => t("profileList.network.chan.light"), color: C.org },
+  strong: { word: () => t("profileList.network.chan.strong"), color: C.red },
+  yes: { word: () => t("profileList.network.chan.yes"), color: C.org },
 };
 
 /** Fuenf Punkte wie in der Historie, auf halbe gerundet, Anzahl der bewerteten in Klammern. */
@@ -44,7 +45,7 @@ function Rating({ avg, rated, size = 9 }: { avg: number | null; rated: number; s
   if (avg === null) return <span style={{ fontSize: 12, color: C.mut }}>–</span>;
   const r = halfStars(avg);
   return (
-    <span role="img" aria-label={`Bewertung im Schnitt ${num(avg)} von 5, ${rated} bewertet`} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+    <span role="img" aria-label={t("profileList.network.ratingAria", { avg: num(avg), n: rated })} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
       {[1, 2, 3, 4, 5].map((n) => {
         const full = n <= r;
         const half = !full && n - 0.5 === r;
@@ -98,8 +99,8 @@ export function CoffeeProfiles({ coffeeId, mobile, profiles, onStart, onOpenHist
   const { grinders } = useGrinders();
   const data = useNetwork<CoffeeNetwork>(`/api/network/coffee/${coffeeId}`);
   if (!data) return null;
-  const basketName = (id: number | null) => (id === null ? "ohne Sieb" : baskets.find((b) => b.id === id)?.name ?? `Sieb #${id}`);
-  const grinderName = (id: number | null) => (id === null ? "ohne Mühle" : grinders.find((g) => g.id === id)?.name ?? `Mühle #${id}`);
+  const basketName = (id: number | null) => (id === null ? t("profileList.network.noBasket") : baskets.find((b) => b.id === id)?.name ?? t("profileList.network.basketN", { id }));
+  const grinderName = (id: number | null) => (id === null ? t("profileList.network.noGrinder") : grinders.find((g) => g.id === id)?.name ?? t("profileList.network.grinderN", { id }));
   const noteWord = (n: NetRow["last"]["note"]) =>
     n === "finer" ? t("shotRating.grindFiner") : n === "coarser" ? t("shotRating.grindCoarser") : n === "ok" ? t("shotRating.grindOk") : null;
   const total = data.groups.reduce((a, g) => a + g.n, 0);
@@ -128,11 +129,11 @@ export function CoffeeProfiles({ coffeeId, mobile, profiles, onStart, onOpenHist
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 22 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-        <h2 style={{ margin: 0, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.mut }}>Mit diesen Profilen</h2>
-        {total > 0 && <span style={{ fontSize: 12, color: C.mut }}>{total} Bezüge · {profileCount} Profile</span>}
+        <h2 style={{ margin: 0, fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.mut }}>{t("profileList.network.heading")}</h2>
+        {total > 0 && <span style={{ fontSize: 12, color: C.mut }}>{t("profileList.network.summary", { shots: total, profiles: profileCount })}</span>}
       </div>
       {data.groups.length === 0 && (
-        <div style={{ fontSize: 13, color: C.mut }}>Noch kein Bezug mit dieser Sorte.</div>
+        <div style={{ fontSize: 13, color: C.mut }}>{t("profileList.network.noShotsCoffee")}</div>
       )}
 
       {data.groups.map((g) => (
@@ -140,12 +141,12 @@ export function CoffeeProfiles({ coffeeId, mobile, profiles, onStart, onOpenHist
           <div style={{ minHeight: 18, display: "flex", alignItems: "center", gap: 14, padding: "0 14px", marginTop: 4 }}>
             <span style={{ ...groupHead, flex: 1 }}>{basketName(g.basketId)} · {grinderName(g.grinderId)}</span>
             {!mobile && <>
-              <span style={{ ...colHead, width: 44 }}>Bezüge</span>
-              <span style={{ ...colHead, width: 70 }}>Mahlgrad</span>
-              <span style={{ ...colHead, width: 104 }}>Bewertung</span>
-              <span style={{ ...colHead, width: 126 }}>Zuletzt</span>
-              <span style={{ ...colHead, width: 80 }}>Channeling</span>
-              <span style={{ ...colHead, width: 44 }}>Datum</span>
+              <span style={{ ...colHead, width: 44 }}>{t("profileList.network.col.shots")}</span>
+              <span style={{ ...colHead, width: 70 }}>{t("profileList.network.col.grind")}</span>
+              <span style={{ ...colHead, width: 104 }}>{t("profileList.network.col.rating")}</span>
+              <span style={{ ...colHead, width: 126 }}>{t("profileList.network.col.last")}</span>
+              <span style={{ ...colHead, width: 80 }}>{t("profileList.network.col.channeling")}</span>
+              <span style={{ ...colHead, width: 44 }}>{t("profileList.network.col.date")}</span>
               <span style={{ width: 100 }} />
             </>}
           </div>
@@ -168,7 +169,7 @@ export function CoffeeProfiles({ coffeeId, mobile, profiles, onStart, onOpenHist
                 </div>
                 <span style={{ width: 44 }}>
                   <button
-                    aria-label={`${r.n} Bezüge mit ${r.label} in der Historie zeigen`}
+                    aria-label={t("profileList.network.showInHistory", { n: r.n, label: r.label })}
                     onClick={() => onOpenHistory({ profileId: r.id, coffeeId, basketId: g.basketId })}
                     style={linkBtn}
                   >{r.n}×</button>
@@ -176,10 +177,10 @@ export function CoffeeProfiles({ coffeeId, mobile, profiles, onStart, onOpenHist
                 <span style={{ width: 70, fontFamily: MONO, fontSize: 13, color: C.txt }}>{range(r.grindMin, r.grindMax)}</span>
                 <span style={{ width: 104 }}><Rating avg={r.ratingAvg} rated={r.rated} /></span>
                 {!mobile && <span style={{ width: 126, fontSize: 12.5, color: C.txtS, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {r.last.grind !== null ? `MG ${num(r.last.grind)}` : "–"}{note ? ` · ${note.toLowerCase()}` : ""}
+                  {r.last.grind !== null ? t("profileList.network.grindShort", { v: num(r.last.grind) }) : "–"}{note ? ` · ${note.toLowerCase()}` : ""}
                 </span>}
                 {!mobile && <span style={{ width: 80, display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: chan?.color ?? C.mut }}>
-                  {chan ? <><span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", background: chan.color }} />{chan.word}</> : "–"}
+                  {chan ? <><span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", background: chan.color }} />{chan.word()}</> : "–"}
                 </span>}
                 {!mobile && <span style={{ width: 44, fontFamily: MONO, fontSize: 11.5, color: C.mut }}>{day(r.last.at)}</span>}
                 {startButton(p, r.last.variantId, g.basketId)}
@@ -204,12 +205,13 @@ export function ProfileRanWith({ profileId, variantId, variantName, onOpenHistor
   onOpenHistory?: (filters: Partial<ShotFilters>) => void;
   onOpenCoffee?: (coffeeId: number) => void;
 }) {
+  const { t } = useTranslation();
   const { grinders } = useGrinders();
   const data = useNetwork<ProfileNetwork>(`/api/network/profile/${profileId}`);
   if (!data) return null;
   const groups = data.groups.filter((g) => variantId !== null && g.variantId === variantId);
-  if (groups.length === 0) return <div style={{ fontSize: 13, color: C.mut, padding: "6px 0" }}>Noch kein Bezug mit dieser Variante.</div>;
-  const grinderName = (id: number | null) => (id === null ? "ohne Mühle" : grinders.find((g) => g.id === id)?.name ?? `Mühle #${id}`);
+  if (groups.length === 0) return <div style={{ fontSize: 13, color: C.mut, padding: "6px 0" }}>{t("profileList.network.noShotsVariant")}</div>;
+  const grinderName = (id: number | null) => (id === null ? t("profileList.network.noGrinder") : grinders.find((g) => g.id === id)?.name ?? t("profileList.network.grinderN", { id }));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {groups.map((g) => (
@@ -221,7 +223,7 @@ export function ProfileRanWith({ profileId, variantId, variantName, onOpenHistor
               <button
                 onClick={() => onOpenHistory({ profileId, variantId })}
                 style={{ height: 28, padding: "0 10px", border: `1px solid ${C.bdr2}`, borderRadius: 7, background: "transparent", color: C.accLight, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
-              >In der Historie ({g.n})</button>
+              >{t("profileList.network.inHistory", { n: g.n })}</button>
             )}
           </div>
           {g.rows.map((r) => (
@@ -229,14 +231,14 @@ export function ProfileRanWith({ profileId, variantId, variantName, onOpenHistor
               <span style={{ width: 200, color: r.id !== null ? C.txt : C.txtS, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</span>
               <span style={{ width: 44 }}>
                 {r.id !== null && onOpenHistory
-                  ? <button aria-label={`${r.n} Bezüge mit ${r.label} in der Historie zeigen`} onClick={() => onOpenHistory({ profileId, variantId, coffeeId: r.id })} style={{ ...linkBtn, fontSize: 12.5 }}>{r.n}×</button>
+                  ? <button aria-label={t("profileList.network.showInHistory", { n: r.n, label: r.label })} onClick={() => onOpenHistory({ profileId, variantId, coffeeId: r.id })} style={{ ...linkBtn, fontSize: 12.5 }}>{r.n}×</button>
                   : <span style={{ fontFamily: MONO, color: C.txtS }}>{r.n}×</span>}
               </span>
-              <span style={{ width: 100, fontFamily: MONO, color: C.txtS }}>{r.grindMin !== null ? `MG ${range(r.grindMin, r.grindMax)}` : "–"}</span>
+              <span style={{ width: 100, fontFamily: MONO, color: C.txtS }}>{r.grindMin !== null ? t("profileList.network.grindShort", { v: range(r.grindMin, r.grindMax) }) : "–"}</span>
               <span style={{ width: 104 }}><Rating avg={r.ratingAvg} rated={r.rated} size={8} /></span>
-              <span style={{ flex: 1, fontSize: 11.5, color: C.acc }}>{r.reference ? `★ Referenz${r.reference.grind !== null ? ` · MG ${num(r.reference.grind)}` : ""}` : ""}</span>
+              <span style={{ flex: 1, fontSize: 11.5, color: C.acc }}>{r.reference ? `★ ${t("profileList.network.reference")}${r.reference.grind !== null ? ` · ${t("profileList.network.grindShort", { v: num(r.reference.grind) })}` : ""}` : ""}</span>
               {r.id !== null && onOpenCoffee && (
-                <button onClick={() => onOpenCoffee(r.id!)} style={{ padding: "0 4px", height: 28, border: "none", background: "transparent", color: C.accLight, fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>Sorte</button>
+                <button onClick={() => onOpenCoffee(r.id!)} style={{ padding: "0 4px", height: 28, border: "none", background: "transparent", color: C.accLight, fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>{t("profileList.network.coffee")}</button>
               )}
             </div>
           ))}

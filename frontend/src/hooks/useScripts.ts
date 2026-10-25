@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { XeniaScript, SyncResult } from "@shared/types.js";
+import { t } from "../i18n/index.js";
 
 // ---------------------------------------------------------------------------
 // API helper
@@ -97,7 +98,7 @@ export function useScripts(): UseScriptsReturn {
       const body = (await res.json().catch(() => ({}))) as
         { error?: string; conflict?: boolean; machineContent?: string } & Partial<XeniaScript>;
       if (res.status === 409 && body.conflict) {
-        throw new ScriptConflict(body.error ?? "Konflikt", body.machineContent ?? "");
+        throw new ScriptConflict(body.error ?? t("ui.scripts.conflict"), body.machineContent ?? "");
       }
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       await fetchScripts();

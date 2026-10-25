@@ -1,5 +1,6 @@
 import { getDb } from "./index.js";
 import type { BrewProfile, ProfileVariant, ProfileVariantInput, ShotSize } from "../../../shared/src/types.js";
+import { endsWithoutYield } from "../../../shared/src/brew-steps.js";
 
 /**
  * Varianten eines Profils (vereinter Editor, Schnitt 3).
@@ -278,8 +279,9 @@ export function checkVariants(
     if (pn != null && (!Array.isArray(pn) || pn.length > 50 || pn.some((n) => n !== null && (typeof n !== "string" || n.length > 40)))) {
       return `„${name}“: Phasennamen ungültig (höchstens 50, je 40 Zeichen).`;
     }
-    if (effective(list as VariantInput[], i).brewSteps != null && !(v.yieldG != null && v.yieldG > 0)) {
-      return `„${name}“: läuft in der App und braucht einen Yield.`;
+    const steps = effective(list as VariantInput[], i).brewSteps;
+    if (steps != null && !(v.yieldG != null && v.yieldG > 0) && !endsWithoutYield(steps.steps)) {
+      return `„${name}“: läuft in der App und braucht einen Yield — oder einen Ausstieg in der letzten Phase, die den Bezug dann beendet.`;
     }
   }
   return null;

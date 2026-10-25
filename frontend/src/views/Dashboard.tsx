@@ -25,6 +25,7 @@ import type { ChartSample } from "../hooks/useShotSamples.js";
 import type { ChartXSettings } from "../hooks/useChartSettings.js";
 import { canStartShotFromState } from "../lib/shotReadiness.js";
 import type {
+  DriveStage,
   LiveFrame,
   MachineState,
   MaintenanceRun,
@@ -40,6 +41,11 @@ const C = theme;
 const MONO: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
 };
+
+/** Ablese-Werte beginnen rechts der Druck-Achsenzahlen (Kartenrand 1 + Innenabstand 4 + Achse 28 = 33). */
+const READOUT_LEFT = 32;
+/** Handy: so viel Platz lässt das Diagramm über der Kurve für die einzeilige Wertezeile. */
+const MOBILE_READOUT_INSET = 28;
 
 /** Rückspül-Reminder banner action button style. */
 const backflushBtn = (primary: boolean): React.CSSProperties => ({
@@ -82,6 +88,10 @@ interface DashboardProps {
   /** lastEndedShot kommt aus der DB (App neu geladen), nicht aus einem eben
    *  beendeten Bezug — dann kein "Bezug beendet"-Hinweis. */
   restoredShot?: boolean;
+  /** Alle Profile — fuer den Namen des gezeigten Bezugs ueber dem Diagramm. */
+  profiles?: Profile[];
+  /** Aktuelle Stufe eines laufenden App-Bezugs (null bei Skript-Bezuegen). */
+  driveStage?: DriveStage | null;
   /** ÄW-B: app-initiated maintenance run in progress (backflush etc.). When set,
    *  the chart area shows a "maintenance running" banner + countdown instead. */
   maintenance?: MaintenanceRun | null;
@@ -132,6 +142,8 @@ export function Dashboard({
   activeShot = null,
   lastEndedShot = null,
   restoredShot = false,
+  profiles = [],
+  driveStage = null,
   maintenance = null,
   maintenanceDone = null,
   onMaintenanceDoneAck,
@@ -184,6 +196,23 @@ export function Dashboard({
   );
   // The shot to display: active takes priority, otherwise the last ended one
   const displayShot = activeShot ?? lastEndedShot;
+
+  // Kopfzeile des Diagramms: Profil (+ Variante, wenn es mehrere gibt), waehrend
+  // eines App-Bezugs dazu die Stufe. Skript-Bezuege haben keine: die Maschine
+  // meldet ihren Skriptschritt nicht — und so bleibt auch keine alte Stufe stehen.
+  const chartTitle = useMemo(() => {
+    const p = displayShot ? profiles.find((x) => x.id === displayShot.profileId) : undefined;
+    if (!p) return null;
+    const variant = (p.variants?.length ?? 0) > 1 ? p.variants!.find((v) => v.id === displayShot!.variantId) : undefined;
+    return [p.name, variant?.name].filter(Boolean).join(" · ");
+  }, [displayShot, profiles]);
+  /** Stufe ohne Namen im Profil — dann ihre Art. */
+  const stageKindLabel: Record<DriveStage["kind"], string> = {
+    preinfusion: t("ui.dashboard.stageKind.preinfusion"), flow: t("ui.dashboard.stageKind.flow"),
+    pressure: t("ui.dashboard.stageKind.pressure"), power: t("ui.dashboard.stageKind.power"),
+  };
+  const chartStage = activeShot !== null && activeShot.scriptId === null && driveStage !== null
+    ? (driveStage.name ?? stageKindLabel[driveStage.kind]) : null;
 
   const bg = frame?.brewGroupTempC ?? 0;
   const bb = frame?.brewBoilerTempC ?? 0;
@@ -318,6 +347,11 @@ export function Dashboard({
 
   // One readout cell: 3px curve-colour bar (left) + key over mono value.
   // barColor ties the cell to its chart curve; valueColor highlights state.
+  // Handy: die Ablese-Werte stehen in einer Zeile über der Kurve statt darauf —
+  // zweizeilig verdeckten sie das obere Viertel des Diagramms.
+  const roGap = mobile ? 5 : 8;
+  const roValueSize = mobile ? 14 : 19;
+  const roUnitSize = mobile ? 9.5 : 11;
   const roCell = (
     key: string,
     value: string,
@@ -325,16 +359,16 @@ export function Dashboard({
     barColor: string,
     valueColor: string = C.txt,
   ) => (
-    <div style={{ display: "flex", gap: 8 }}>
+    <div style={{ display: "flex", gap: roGap }}>
       <div style={{ width: 3, borderRadius: 2, background: barColor, alignSelf: "stretch", flexShrink: 0 }} />
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <div style={{ fontSize: 9, letterSpacing: "0.1em", color: C.mut, textTransform: "uppercase" }}>
           {key}
         </div>
-        <div style={{ ...MONO, fontWeight: 700, fontSize: 19, lineHeight: 1, color: valueColor }}>
+        <div style={{ ...MONO, fontWeight: 700, fontSize: roValueSize, lineHeight: 1, color: valueColor, whiteSpace: "nowrap" }}>
           {value}
           {unit ? (
-            <small style={{ fontSize: 11, color: C.mut, fontWeight: 400, marginLeft: 2 }}>{unit}</small>
+            <small style={{ fontSize: roUnitSize, color: C.mut, fontWeight: 400, marginLeft: 2 }}>{unit}</small>
           ) : null}
         </div>
       </div>
@@ -447,7 +481,7 @@ export function Dashboard({
         {/* Dampf: setpoint is a pressure (bar) — display only, no color logic
             (the steam thresholds in Gauge are in °C and don't apply to bar). */}
         <Gauge
-          label="Dampf"
+          label={t("ui.dashboard.steam")}
           value={sb}
           unit="bar"
           decimals={2}
@@ -466,7 +500,7 @@ export function Dashboard({
             <button
               onClick={() => { void handleStop(); }}
               disabled={stopping}
-              title="Bezug stoppen"
+              title={t("ui.stop.title")}
               onMouseEnter={(e) => { if (!stopping) e.currentTarget.style.background = alpha(C.red, 0.18); }}
               onMouseLeave={(e) => { e.currentTarget.style.background = alpha(C.red, 0.10); }}
               style={{
@@ -496,7 +530,7 @@ export function Dashboard({
                 }}
               />
               <Octagon size={15} strokeWidth={2.2} />
-              {stopping ? "Stoppe…" : "Stoppen"}
+              {stopping ? t("ui.stop.busy") : t("ui.stop.button")}
             </button>
             )
           ) : (
@@ -597,17 +631,32 @@ export function Dashboard({
           ghosts={ghosts}
           fill
           endedBadge={!restoredShot}
+          title={chartTitle}
+          titleTail={chartTitle ? chartStage : null}
+          topInset={mobile && chartMode !== "idle" ? MOBILE_READOUT_INSET : 0}
         />
 
         {/* Live readout overlay — over the top of the curve (brewing/ended only).
             Sits just below the chart's mode badge; gradient fades into the plot.
+            Starts right of the y-axis numbers so they stay readable.
+            Handy: one row in the space the chart leaves above the plot (topInset).
             pointer-events:none so the chart's own hover/tooltip still works. */}
         {chartMode !== "idle" && (
           <div
-            style={{
+            style={mobile ? {
+              position: "absolute",
+              top: 36,
+              left: READOUT_LEFT,
+              right: 10,
+              display: "flex",
+              gap: 8,
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              pointerEvents: "none",
+            } : {
               position: "absolute",
               top: 34,
-              left: 14,
+              left: READOUT_LEFT,
               right: 14,
               display: "flex",
               gap: 18,
@@ -620,15 +669,15 @@ export function Dashboard({
             }}
           >
             {/* Dauer — no curve, neutral bar; value carries the rAF timer ref */}
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: roGap }}>
               <div style={{ width: 3, borderRadius: 2, background: C.dim, alignSelf: "stretch", flexShrink: 0 }} />
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <div style={{ fontSize: 9, letterSpacing: "0.1em", color: C.mut, textTransform: "uppercase" }}>
-                  Dauer
+                  {t("ui.dashboard.duration")}
                 </div>
                 <div
                   ref={elapsedRef}
-                  style={{ ...MONO, fontWeight: 700, fontSize: 19, lineHeight: 1, color: isBrewing ? C.txt : C.mut }}
+                  style={{ ...MONO, fontWeight: 700, fontSize: roValueSize, lineHeight: 1, color: isBrewing ? C.txt : C.mut }}
                 >
                   {durationText}
                 </div>
@@ -637,16 +686,16 @@ export function Dashboard({
 
             {/* Balkenfarben = Kurvenfarben, beide aus den Messreihen-Tokens (theme.ts):
                 Druck, Fluss, Gewicht, Temperatur. */}
-            {roCell("Druck", dPressure !== null ? dPressure.toFixed(1) : "—", "bar", C.seriesPressure)}
-            {roCell("Flow", dFlow !== null ? dFlow.toFixed(2) : "—", "g/s", C.seriesFlow)}
+            {roCell(t("ui.series.pressure"), dPressure !== null ? dPressure.toFixed(1) : "—", "bar", C.seriesPressure)}
+            {roCell(t("ui.series.flow"), dFlow !== null ? dFlow.toFixed(2) : "—", "g/s", C.seriesFlow)}
             {roCell(
-              "Gewicht",
+              t("ui.series.weight"),
               dWeight !== null ? dWeight.toFixed(1) : "—",
               yieldTarget !== null ? `/ ${yieldTarget.toFixed(0)} g` : "g",
               C.seriesWeight,
               weightReached ? C.grn : C.txt,
             )}
-            {roCell("Temp", dTemp !== null ? dTemp.toFixed(1) : "—", "°C", C.seriesTemp, tempColor)}
+            {roCell(t("ui.series.temp"), dTemp !== null ? dTemp.toFixed(1) : "—", "°C", C.seriesTemp, tempColor)}
           </div>
         )}
         </>

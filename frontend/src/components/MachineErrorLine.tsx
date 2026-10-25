@@ -10,6 +10,7 @@
 import { useEffect } from "react";
 import { X, AlertTriangle } from "lucide-react";
 import theme from "../theme.js";
+import { useTranslation } from "../i18n/index.js";
 
 const C = theme;
 
@@ -22,6 +23,7 @@ interface MachineErrorLineProps {
 }
 
 export function MachineErrorLine({ message, onDismiss }: MachineErrorLineProps) {
+  const { t } = useTranslation();
   useEffect(() => {
     if (message === null) return;
     const timer = setTimeout(onDismiss, AUTO_HIDE_MS);
@@ -59,7 +61,7 @@ export function MachineErrorLine({ message, onDismiss }: MachineErrorLineProps) 
       <span style={{ flex: 1, minWidth: 0 }}>{message}</span>
       <button
         onClick={onDismiss}
-        aria-label="Meldung schließen"
+        aria-label={t("ui.machineError.dismiss")}
         style={{
           background: "none",
           border: "none",

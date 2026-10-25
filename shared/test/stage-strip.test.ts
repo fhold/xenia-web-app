@@ -157,3 +157,13 @@ test("Erster Tropfen: ein einzelner Ausreißer der Waage zählt nicht", () => {
   assert.equal(firstDropS(s), 20.4);
   assert.equal(firstDropS([{ t: 1, weight: 0 }, { t: 2, weight: null }]), null);
 });
+
+test("Flow-Bezug: Ausstieg „Fluss über“ (Decent flow_over) erscheint als ≥-Ausstieg", () => {
+  const steps: BrewStep[] = [
+    { kind: "pressure", targetPressureBar: 3, exit: { seconds: 20, flowAboveGs: 1.5 } },
+    { kind: "flow", targetFlowGs: 1.5, exit: {} },
+  ];
+  const stages = [stage(0, "pressure", 3, -1000, "flowAboveGs"), stage(1, "flow", 1.5, 9000, null)];
+  const s = flowStageStrip(stages, steps, 30, { mode: "flowhold", weightG: 36 })!;
+  assert.deepEqual(s.segments[0]!.exit, { kind: "flowAbove", value: 1.5 });
+});

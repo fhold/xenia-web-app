@@ -130,6 +130,45 @@ test("Versuch: ohne Angabe keiner, PUT schaltet um und nimmt nur true/false, ein
   assert.equal(profiles.findById(probe)!.isTrial, true);
 });
 
+test("Einordnung: ohne Angabe leer, PUT setzt mehrere, nur dark/light/filter ohne Doppel, ein Neustart lässt sie stehen", async () => {
+  assert.ok((db.prepare("PRAGMA table_info(profile)").all() as { name: string }[]).some((c) => c.name === "fit"));
+  assert.deepEqual(profiles.findById(londinium)!.fit, []);
+  const app = Fastify();
+  registerProfileRoutes(app, profiles, new SqliteScriptRepo(), () => {});
+  const put = (payload: object) => app.inject({ method: "PUT", url: `/api/profiles/${londinium}`, payload });
+  const both = await put({ fit: ["dark", "light"] });
+  assert.equal(both.statusCode, 200);
+  assert.deepEqual((both.json() as { fit: string[] }).fit, ["dark", "light"]);
+  for (const bad of [["medium"], ["dark", "dark"], "dark"]) {
+    const r = await put({ fit: bad });
+    assert.equal(r.statusCode, 400, JSON.stringify(bad));
+    assert.match((r.json() as { error: string }).error, /fit/);
+  }
+  assert.equal((await put({ notes: "MG 20" })).statusCode, 200);
+  applySchema();
+  assert.deepEqual(profiles.findById(londinium)!.fit, ["dark", "light"]);
+  assert.deepEqual(((await put({ fit: [] })).json() as { fit: string[] }).fit, []);
+  const filter = profiles.insert({ ...base, name: "Filterprobe", scriptIdSingle: 19, fit: ["filter"] });
+  assert.deepEqual(profiles.findById(filter)!.fit, ["filter"]);
+});
+
+test("Archiv: ohne Angabe nicht archiviert, PUT archiviert und stellt wieder her, nur true/false, ein Neustart lässt es stehen", async () => {
+  assert.ok((db.prepare("PRAGMA table_info(profile)").all() as { name: string }[]).some((c) => c.name === "archived"));
+  assert.equal(profiles.findById(londinium)!.isArchived, false);
+  const app = Fastify();
+  registerProfileRoutes(app, profiles, new SqliteScriptRepo(), () => {});
+  const put = (payload: object) => app.inject({ method: "PUT", url: `/api/profiles/${londinium}`, payload });
+  const on = await put({ isArchived: true, isFavorite: false });
+  assert.equal(on.statusCode, 200);
+  assert.deepEqual([(on.json() as { isArchived: boolean }).isArchived, (on.json() as { isFavorite: boolean }).isFavorite], [true, false]);
+  const bad = await put({ isArchived: "ja" });
+  assert.equal(bad.statusCode, 400);
+  assert.match((bad.json() as { error: string }).error, /isArchived/);
+  applySchema();
+  assert.equal(profiles.findById(londinium)!.isArchived, true);
+  assert.equal(((await put({ isArchived: false })).json() as { isArchived: boolean }).isArchived, false);
+});
+
 test("Rückspül-Erinnerung zählt die Läufe der gewählten Profile; die Skriptliste wird einmalig umgestellt", async () => {
   const settings = new SqliteSettingsRepo();
   // Umstellung von Skript 26 auf das Profil, das es faehrt

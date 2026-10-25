@@ -71,6 +71,17 @@ test("at setpoint output equals seeded operating point", () => {
 // Clamping
 // ---------------------------------------------------------------------------
 
+test("shift verschiebt den Arbeitspunkt — bei Fehler null folgt der Ausgang, begrenzt wie der Ausgang", () => {
+  const c = rawController({ outMin: 15, outMax: 100 });
+  c.seed(60);
+  c.shift(-5);
+  assert.equal(c.update(2.0, 400).output, 55);
+  c.shift(-100);
+  assert.equal(c.update(2.0, 400).output, 15, "nicht unter die Untergrenze aufziehen");
+  c.shift(10);
+  assert.equal(c.update(2.0, 400).output, 25, "von der Grenze aus sofort wieder nach oben");
+});
+
 test("output clamps to outMax and flags saturation", () => {
   const pi = rawController();
   pi.seed(100);

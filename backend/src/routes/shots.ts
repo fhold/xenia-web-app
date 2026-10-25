@@ -30,6 +30,7 @@ import { SqliteBasketRepo } from "../db/basket-repo.js";
 import type {
   ApiResponse,
   BrewDefInfo,
+  CompareSuggestions,
   GrindSource,
   Profile,
   Shot,
@@ -402,6 +403,27 @@ export function registerShotRoutes(
     const res: ShotCompare = {
       enabled: settingsRepo?.get("rating_compare_prev") === "true",
       previous: shotRepo.findPreviousSameCoffee(numId),
+    };
+    return res;
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /api/shots/:id/compare-suggestions — womit man diesen Bezug vergleichen
+  // will: die Referenz ★ der Sorte und der Bezug davor, als Historienzeilen.
+  // ---------------------------------------------------------------------------
+  app.get("/api/shots/:id/compare-suggestions", async (req, reply) => {
+    const numId = parseInt((req.params as { id: string }).id, 10);
+    if (Number.isNaN(numId) || !shotRepo.findById(numId)) {
+      return reply.status(404).send({ ok: false, error: "Shot not found" } as ApiResponse);
+    }
+    const refId = shotRepo.findReferenceSameCoffee(numId);
+    const prevId = shotRepo.findPreviousSameCoffee(numId)?.id ?? null;
+    const ids = [refId, prevId].filter((x): x is number => x !== null);
+    const rows = shotRepo.listShotsFiltered({ ids, limit: 2, offset: 0, sort: "date_desc", category: "all" }).shots;
+    const res: CompareSuggestions = {
+      reference: rows.find((s) => s.id === refId) ?? null,
+      // Ist der Vorgaenger zugleich die Referenz, steht er nur einmal da.
+      previous: prevId !== refId ? (rows.find((s) => s.id === prevId) ?? null) : null,
     };
     return res;
   });

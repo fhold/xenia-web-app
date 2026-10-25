@@ -7,17 +7,20 @@
  * `short` = „12. Jun.“ / „12. Jun. 2025“, `numeric` = „12.10.“ / „12.10.25“.
  */
 
+import { getCurrentLanguage } from "../i18n/index.js";
+
 export interface DayFormat {
   /** "auto" (Vorgabe): Jahr nur, wenn nicht das laufende. */
   year?: "always" | "auto";
   style?: "short" | "numeric";
   /** Uhrzeit dazu („17. Okt., 05:54“). */
   time?: boolean;
+  /** Vorgabe: die eingestellte Sprache (de-DE / en-US). */
   locale?: string;
 }
 
 /** Tag und Monat, das Jahr nach Regel; "" bei ungültigem Datum. */
-export function formatDay(value: Date | number | string, { year = "auto", style = "short", time = false, locale = "de-DE" }: DayFormat = {}): string {
+export function formatDay(value: Date | number | string, { year = "auto", style = "short", time = false, locale = getCurrentLanguage() === "en" ? "en-US" : "de-DE" }: DayFormat = {}): string {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return "";
   const withYear = year === "always" || d.getFullYear() !== new Date().getFullYear();

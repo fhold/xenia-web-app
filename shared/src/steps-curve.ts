@@ -19,6 +19,7 @@ import type { ScriptPhase, ScriptTimeline, WaitSegment } from "./script-timeline
 import { powerToBar } from "./script-timeline.js";
 import { barToPower, MAX_PRESSURE_BAR } from "./script-edit.js";
 import { preinfusionArrivalGs } from "./pump-curve.js";
+import { L } from "./shared-lang.js";
 
 /** Sekunden fuer eine Phase, deren Ende rein zustandsabhaengig ist. */
 export const FALLBACK_DURATION_S = 10;
@@ -65,19 +66,21 @@ export function buildPhases(steps: BrewStep[], yieldTargetG: number | null): Nom
   return phases;
 }
 
-const num = (v: number) => String(Math.round(v * 100) / 100).replace(".", ",");
+const num = (v: number) => String(Math.round(v * 100) / 100).replace(".", L(",", "."));
 
 /** Wodurch die Phase endet, wenn nicht nach Uhr — Beschriftung des Bands; null = nach Uhr. */
 function openEnd(steps: BrewStep[], i: number, yieldG: number | null): string | null {
   const s = steps[i]!;
-  if (i === steps.length - 1) return yieldG !== null ? `bis ${num(yieldG)} g` : null;
+  const until = L("bis", "until");
+  if (i === steps.length - 1) return yieldG !== null ? `${until} ${num(yieldG)} g` : null;
   const arrival = s.kind === "preinfusion" ? preinfusionArrivalGs(steps[i + 1]) : null;
-  if (arrival !== null) return `bis F ≥ ${num(arrival)} g/s`;
+  if (arrival !== null) return `${until} F ≥ ${num(arrival)} g/s`;
   const e = s.exit;
-  if (e.weightG != null) return `bis ${num(e.weightG)} g`;
-  if (e.pressureBar != null) return `bis ${num(e.pressureBar)} bar`;
-  if (e.pressureBelowBar != null) return `bis P ≤ ${num(e.pressureBelowBar)} bar`;
-  if (e.flowGs != null) return `bis F ≤ ${num(e.flowGs)} g/s`;
+  if (e.weightG != null) return `${until} ${num(e.weightG)} g`;
+  if (e.pressureBar != null) return `${until} ${num(e.pressureBar)} bar`;
+  if (e.pressureBelowBar != null) return `${until} P ≤ ${num(e.pressureBelowBar)} bar`;
+  if (e.flowGs != null) return `${until} F ≤ ${num(e.flowGs)} g/s`;
+  if (e.flowAboveGs != null) return `${until} F ≥ ${num(e.flowAboveGs)} g/s`;
   return null;
 }
 
@@ -103,7 +106,9 @@ export function stepsToTimeline(steps: BrewStep[], yieldG: number | null): Scrip
         ...base, mode: "flow", unit: "ml/s", axis: "flow", startValue: from, targetValue: s.targetFlowGs, endValue: s.targetFlowGs,
         rawTarget: s.targetFlowGs,
         // Uebernommen: das Ziel steht erst beim Eintritt fest, die Kurve zeigt den erwarteten Wert.
-        label: s.adoptFlow ? `Fluss halten ≈ ${num(s.targetFlowGs)} g/s` : `Fluss ${num(s.targetFlowGs)} g/s`,
+        label: s.adoptFlow
+          ? L(`Fluss halten ≈ ${num(s.targetFlowGs)} g/s`, `Hold flow ≈ ${num(s.targetFlowGs)} g/s`)
+          : L(`Fluss ${num(s.targetFlowGs)} g/s`, `Flow ${num(s.targetFlowGs)} g/s`),
         startEstimated: entry && rampDurMs > 0,
       });
       last.flow = s.targetFlowGs;
@@ -111,7 +116,10 @@ export function stepsToTimeline(steps: BrewStep[], yieldG: number | null): Scrip
       const from = rampDurMs > 0 ? last.pressure : s.targetPressureBar;
       phases.push({
         ...base, mode: "pressure", unit: "bar", axis: "bar", startValue: from, targetValue: s.targetPressureBar, endValue: s.targetPressureBar,
-        rawTarget: s.targetPressureBar, label: `Druck ${num(s.targetPressureBar)} bar`,
+        rawTarget: s.targetPressureBar,
+        label: s.adoptPressure
+          ? L(`Druck halten ≈ ${num(s.targetPressureBar)} bar`, `Hold pressure ≈ ${num(s.targetPressureBar)} bar`)
+          : L(`Druck ${num(s.targetPressureBar)} bar`, `Pressure ${num(s.targetPressureBar)} bar`),
       });
       last.pressure = s.targetPressureBar;
       last.flow = null;
@@ -120,7 +128,7 @@ export function stepsToTimeline(steps: BrewStep[], yieldG: number | null): Scrip
       const from = rampDurMs > 0 ? powerToBar(last.power) : target;
       phases.push({
         ...base, mode: "power", unit: "%", axis: "bar", startValue: from, targetValue: target, endValue: target,
-        rawTarget: s.power, label: `Leistung ${num(s.power)} %`,
+        rawTarget: s.power, label: L(`Leistung ${num(s.power)} %`, `Power ${num(s.power)} %`),
       });
       last.power = s.power;
       last.flow = null;

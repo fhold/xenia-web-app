@@ -19,6 +19,7 @@ import type {
   ProfileUpdate,
 } from "../../../shared/src/types.js";
 import { parseTargetTempC } from "../../../shared/src/profile-temp.js";
+import { isProfileFitList } from "../../../shared/src/types.js";
 import { validateBrewProfile } from "../../../shared/src/brew-steps.js";
 import { checkVariants } from "../db/variant-repo.js";
 import { SqliteBasketRepo } from "../db/basket-repo.js";
@@ -70,6 +71,21 @@ function checkProfileInvariants(p: EffectiveProfile): string | null {
   return null;
 }
 
+// Wartung schaltet Ventile — das geht nur im Skript, nicht mit App-Stufen.
+export const kindError = (kind: unknown, variants: ProfileCreate["variants"]): string | null => {
+  if (kind === undefined) return null;
+  if (kind !== "brew" && kind !== "maintenance" && kind !== "test") return "kind muss brew, maintenance oder test sein.";
+  if (kind === "maintenance" && variants?.some((v) => v.brewSteps != null)) return "Wartung geht nur mit Skript-Kurven, nicht in der App.";
+  return null;
+};
+// Versuch ist ein Schalter — SQLite nimmt sonst jeden Wert.
+export const trialError = (isTrial: unknown): string | null =>
+  (isTrial === undefined || typeof isTrial === "boolean" ? null : "isTrial muss true oder false sein.");
+export const archivedError = (isArchived: unknown): string | null =>
+  (isArchived === undefined || typeof isArchived === "boolean" ? null : "isArchived muss true oder false sein.");
+export const fitError = (fit: unknown): string | null =>
+  (fit === undefined || isProfileFitList(fit) ? null : "fit muss eine Liste aus dark, light, filter sein (ohne Doppel).");
+
 export function registerProfileRoutes(
   app: FastifyInstance,
   profileRepo: ProfileRepo,
@@ -79,16 +95,6 @@ export function registerProfileRoutes(
   // Schnitt 3c: Varianten fuehren — dann pruefen sie, und die alten Kurven-Felder
   // des Bodys zaehlen nicht (sie werden aus den Varianten abgeleitet).
   const baskets = new SqliteBasketRepo();
-  // Wartung schaltet Ventile — das geht nur im Skript, nicht mit App-Stufen.
-  const kindError = (kind: unknown, variants: ProfileCreate["variants"]): string | null => {
-    if (kind === undefined) return null;
-    if (kind !== "brew" && kind !== "maintenance" && kind !== "test") return "kind muss brew, maintenance oder test sein.";
-    if (kind === "maintenance" && variants?.some((v) => v.brewSteps != null)) return "Wartung geht nur mit Skript-Kurven, nicht in der App.";
-    return null;
-  };
-  // Versuch ist ein Schalter — SQLite nimmt sonst jeden Wert.
-  const trialError = (isTrial: unknown): string | null =>
-    (isTrial === undefined || typeof isTrial === "boolean" ? null : "isTrial muss true oder false sein.");
   const variantError = (variants: unknown) =>
     checkVariants(variants, {
       basket: (id) => baskets.findById(id) !== undefined,
@@ -189,7 +195,7 @@ export function registerProfileRoutes(
       return res;
     }
 
-    const invariant = kindError(body.kind, body.variants) ?? trialError(body.isTrial)
+    const invariant = kindError(body.kind, body.variants) ?? trialError(body.isTrial) ?? fitError(body.fit) ?? archivedError(body.isArchived)
       ?? (body.variants !== undefined ? variantError(body.variants) : checkProfileInvariants(body));
     if (invariant) {
       reply.status(400);
@@ -265,7 +271,7 @@ export function registerProfileRoutes(
     // state no start path accepts.
     const pick = <K extends keyof ProfileUpdate>(key: K) =>
       patch[key] !== undefined ? patch[key] : (existing[key as keyof typeof existing] as ProfileUpdate[K]);
-    const invariant = kindError(patch.kind, patch.variants) ?? trialError(patch.isTrial) ?? (patch.variants !== undefined ? variantError(patch.variants) : checkProfileInvariants({
+    const invariant = kindError(patch.kind, patch.variants) ?? trialError(patch.isTrial) ?? fitError(patch.fit) ?? archivedError(patch.isArchived) ?? (patch.variants !== undefined ? variantError(patch.variants) : checkProfileInvariants({
       scriptIdSingle: pick("scriptIdSingle"),
       brewSteps: pick("brewSteps"),
       brewStepsDouble: pick("brewStepsDouble"),

@@ -51,9 +51,12 @@ interface RecentShotCardProps {
   /** Disables tap-to-repeat (e.g. while a brew is running). */
   blocked: boolean;
   onRepeat: (shot: RecentShot) => void;
+  /** Handy: zwei Karten je Breite; Bewertung und Größe rücken in die letzte
+   *  Zeile, sonst drücken sie den Profilnamen auf null Breite. */
+  compact?: boolean;
 }
 
-export function RecentShotCard({ shot, blocked, onRepeat }: RecentShotCardProps) {
+export function RecentShotCard({ shot, blocked, onRepeat, compact = false }: RecentShotCardProps) {
   const { t } = useTranslation();
   const [hover, setHover] = useState(false);
   const [pressed, setPressed] = useState(false);
@@ -75,6 +78,30 @@ export function RecentShotCard({ shot, blocked, onRepeat }: RecentShotCardProps)
     .filter(Boolean)
     .join(" · ");
 
+  const ratingAndSize = (
+    <>
+      {shot.rating !== null && (
+        <span style={{ display: "flex", flexShrink: 0 }}>
+          <RatingDots rating={shot.rating} size={compact ? 6 : 7} />
+        </span>
+      )}
+      <span
+        style={{
+          ...MONO,
+          fontSize: 11,
+          color: C.txtS,
+          background: C.bg,
+          border: `1px solid ${C.bdrL}`,
+          borderRadius: 6,
+          padding: "1px 6px",
+          flexShrink: 0,
+        }}
+      >
+        {sizeLabel}
+      </span>
+    </>
+  );
+
   return (
     <div
       onClick={() => onRepeat(shot)}
@@ -84,12 +111,11 @@ export function RecentShotCard({ shot, blocked, onRepeat }: RecentShotCardProps)
       onMouseUp={() => setPressed(false)}
       title={t("dashboard.recentShots.repeat")}
       style={{
-        flex: "1 1 0",
-        minWidth: 120,
+        ...(compact ? { flex: "0 0 calc(50% - 4px)", minWidth: 0, scrollSnapAlign: "start" } : { flex: "1 1 0", minWidth: 120 }),
         background: active ? C.cardHover : C.card,
         border: `1px solid ${active ? C.accB : C.bdr}`,
         borderRadius: 11,
-        padding: "12px 13px",
+        padding: compact ? "12px 11px" : "12px 13px",
         display: "flex",
         flexDirection: "column",
         gap: 7,
@@ -112,25 +138,7 @@ export function RecentShotCard({ shot, blocked, onRepeat }: RecentShotCardProps)
         >
           {shot.profileName}
         </span>
-        {shot.rating !== null && (
-          <span style={{ display: "flex", flexShrink: 0 }}>
-            <RatingDots rating={shot.rating} size={7} />
-          </span>
-        )}
-        <span
-          style={{
-            ...MONO,
-            fontSize: 11,
-            color: C.txtS,
-            background: C.bg,
-            border: `1px solid ${C.bdrL}`,
-            borderRadius: 6,
-            padding: "1px 6px",
-            flexShrink: 0,
-          }}
-        >
-          {sizeLabel}
-        </span>
+        {!compact && ratingAndSize}
         <span
           style={{
             display: "flex",
@@ -156,8 +164,13 @@ export function RecentShotCard({ shot, blocked, onRepeat }: RecentShotCardProps)
         {metaRest}
       </div>
 
-      {/* Line 3: dose → yield (only when both recorded) */}
-      {doseYield && (
+      {/* Line 3: dose → yield (only when both recorded); compact: plus rating and size */}
+      {compact ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <span style={{ ...MONO, fontSize: 11, color: C.txtS, flex: 1, minWidth: 0, ...ellipsis }}>{doseYield}</span>
+          {ratingAndSize}
+        </div>
+      ) : doseYield && (
         <div style={{ ...MONO, fontSize: 11, color: C.txtS, ...ellipsis }}>{doseYield}</div>
       )}
     </div>

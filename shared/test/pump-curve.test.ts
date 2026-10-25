@@ -12,6 +12,8 @@ import {
   preinfusionPower,
   preinfusionArrivalGs,
   PREINFUSION_POWER_CAP,
+  PREINFUSION_FAST_FILL_POWER,
+  pressureRampFeedForward,
 } from "../src/pump-curve.js";
 
 const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
@@ -36,6 +38,29 @@ test("Preinfusion: sanfter Anlauf und feste Obergrenze", () => {
   near(preinfusionPower(c, "normal", 0, 0), 0);
   near(preinfusionPower(c, "normal", 0, 1500), PREINFUSION_POWER_CAP / 2);
   near(preinfusionPower(c, "brisk", 12, 10000), PREINFUSION_POWER_CAP);
+});
+
+test("Preinfusion schnell fuellen: volle Pumpe bis 1 bar, danach saettigt sie wie gewaehlt", () => {
+  const c = DEFAULT_PUMP_CURVE;
+  near(preinfusionPower(c, "normal", 0.5, 5000, undefined, "fast"), PREINFUSION_FAST_FILL_POWER);
+  // sanfter Anlauf bis zur vollen Pumpe
+  near(preinfusionPower(c, "normal", 0, 1500, undefined, "fast"), PREINFUSION_FAST_FILL_POWER / 2);
+  // ab Gegendruck wie ohne schnelles Fuellen — auch die Obergrenze 60 % gilt wieder
+  near(preinfusionPower(c, "gentle", 2, 5000, undefined, "fast"), preinfusionPower(c, "gentle", 2, 5000));
+  near(preinfusionPower(c, "brisk", 12, 10000, undefined, "fast"), PREINFUSION_POWER_CAP);
+  // normal = wie bisher
+  near(preinfusionPower(c, "normal", 0.5, 5000, undefined, "normal"), preinfusionPower(c, "normal", 0.5, 5000));
+});
+
+test("Vorsteuerung einer Druckrampe: Steigung der Kennlinie entlang des Pucks", () => {
+  const c = DEFAULT_PUMP_CURVE;
+  // #285: 7 bar, 1,5 g/s → 3,26 + 9,5·1,5/14 ≈ 4,28 %/bar; ein Takt −0,12 bar → ≈ −0,51 %
+  near(pressureRampFeedForward(c, -0.12, 7, 1.5), -0.12 * (3.26 + (9.5 * 1.5) / 14));
+  // unter 2 bar rechnet sie mit 2 bar, ohne Fluss nur mit der Kennlinie
+  near(pressureRampFeedForward(c, -1, 0.5, 1), -(3.26 + 9.5 / 4));
+  near(pressureRampFeedForward(c, -1, 5, 0), -3.26);
+  // ausreissender Fluss: Steigung hoechstens 10 %/bar
+  near(pressureRampFeedForward(c, -1, 2, 50), -10);
 });
 
 test("Preinfusion endet, wenn 90 % des Startflusses der naechsten Flussstufe ankommen", () => {

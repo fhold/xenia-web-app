@@ -41,8 +41,10 @@ import type { ChartSample } from "../hooks/useShotSamples.js";
 import type { ChartXSettings } from "../hooks/useChartSettings.js";
 import { chartXDomain, fixedXTicks, liveDisplayT, trimToDisplayTime } from "@shared/chart-x-domain.js";
 import type { StageStrip as StageStripData } from "@shared/stage-strip.js";
+import { mergeCompare } from "@shared/shot-compare.js";
 import { StageStrip } from "./StageStrip.js";
 import theme, { alpha } from "../theme";
+import { useTranslation } from "../i18n/index.js";
 
 const C = theme;
 
@@ -55,6 +57,13 @@ const COLOR = {
   flow:     C.seriesFlow,
   temp:     C.seriesTemp,
   weight:   C.seriesWeight,
+} as const;
+
+// Bezuege vergleichen: der zweite Bezug in eigener Farbfamilie (theme.ts).
+const COLOR_B = {
+  pressure: C.seriesPressureB,
+  flow:     C.seriesFlowB,
+  weight:   C.seriesWeightB,
 } as const;
 
 // SO-1: commanded "Soll" overlay lines — light green, distinct from all measured series.
@@ -86,6 +95,12 @@ interface ShotChartProps {
   chartHeight?: number;
   /** Fill the parent's height (flex) instead of a fixed px height (Dashboard). */
   fill?: boolean;
+  /** Links in der Kopfzeile: welches Profil laeuft/lief (Dashboard). */
+  title?: string | null;
+  /** Freier Platz über der Kurve in px (Dashboard am Handy: die Ablese-Werte stehen dort). */
+  topInset?: number;
+  /** Hinter dem Titel, wird nie gekuerzt (die laufende Stufe) — gekuerzt wird der Titel. */
+  titleTail?: string | null;
   /** Show the "Bezug beendet" badge in ended mode (auto-hides after 3s).
    *  Off for static views like the history detail modal. Default true. */
   endedBadge?: boolean;
@@ -105,8 +120,24 @@ interface ShotChartProps {
    *  only — see ShotGhostLayer for why there is no live variant. */
   ghosts?: ShotGhosts | null;
   /** Stufenleiste unter der Kurve (History-Detail): teilt die x-Achse des Diagramms. */
-  stageStrip?: { strip: StageStripData; firstDropS: number | null } | null;
+  stageStrip?: { strip: StageStripData; firstDropS: number | null; tail?: { endS: number; gainG: number | null } | null } | null;
+  /** Bezuege vergleichen: der zweite Bezug (Druck, Fluss, Gewicht) in eigenen
+   *  Farben, gestrichelt. Zeiten schon verschoben; die Achse reicht bis zu seinem Ende. */
+  compare?: ChartSample[] | null;
 }
+
+/** Eine Zeile der Recharts-Tabelle; die b-Schluessel nur im Vergleich. */
+type ChartRow = {
+  t: number;
+  pressure: number | null;
+  flow: number | null;
+  temp: number | null;
+  weight: number | null;
+  pump: number | null;
+  bPressure?: number | null;
+  bFlow?: number | null;
+  bWeight?: number | null;
+};
 
 export interface ShotChartStageOverlay {
   /** Green Soll staircase for the flow stages that ran (seconds, v in g/s). */
@@ -174,9 +205,12 @@ interface CustomTooltipProps {
   label?: number;
   payload?: TooltipPayloadEntry[];
   yWeightMax: number;
+  /** Bezuege vergleichen: je Reihe A / B, jeder Wert in der Farbe seiner Kurve. */
+  paired?: boolean;
 }
 
-function CustomTooltip({ active, label, payload, yWeightMax }: CustomTooltipProps) {
+function CustomTooltip({ active, label, payload, yWeightMax, paired = false }: CustomTooltipProps) {
+  const { t } = useTranslation();
   if (!active || !payload || payload.length === 0) return null;
 
   // Build a map from series name to value
@@ -189,25 +223,25 @@ function CustomTooltip({ active, label, payload, yWeightMax }: CustomTooltipProp
 
   const rows: { label: string; value: string; unit: string; color: string }[] = [
     {
-      label: "Druck",
+      label: t("ui.series.pressure"),
       value: fmt(byName["pressure"] ?? null, 1),
       unit: "bar",
       color: COLOR.pressure,
     },
     {
-      label: "Flow",
+      label: t("ui.series.flow"),
       value: fmt(byName["flow"] ?? null, 2),
       unit: "g/s",
       color: COLOR.flow,
     },
     {
-      label: "Temp BG",
+      label: t("ui.series.tempBg"),
       value: fmt(byName["temp"] ?? null, 1),
       unit: "°C",
       color: COLOR.temp,
     },
     {
-      label: "Gewicht",
+      label: t("ui.series.weight"),
       // Weight is stored scaled — convert back to grams for display
       value: byName["weight"] !== undefined
         ? fmt(byName["weight"] / (Y_LEFT_MAX / yWeightMax), 1)
@@ -217,10 +251,20 @@ function CustomTooltip({ active, label, payload, yWeightMax }: CustomTooltipProp
     },
   ];
 
+  // Im Vergleich: A / B je Reihe in den Farben der Kurven; Temperatur zeigt der Vergleich nicht.
+  const grams = (v: number | undefined) => (v !== undefined ? v / (Y_LEFT_MAX / yWeightMax) : null);
+  const pairs = paired
+    ? [
+        { label: t("ui.series.pressure"), unit: "bar", a: fmt(byName["pressure"], 1), b: fmt(byName["bPressure"], 1), ca: COLOR.pressure, cb: COLOR_B.pressure },
+        { label: t("ui.series.flow"), unit: "g/s", a: fmt(byName["flow"], 2), b: fmt(byName["bFlow"], 2), ca: COLOR.flow, cb: COLOR_B.flow },
+        { label: t("ui.series.weight"), unit: "g", a: fmt(grams(byName["weight"]), 1), b: fmt(grams(byName["bWeight"]), 1), ca: COLOR.weight, cb: COLOR_B.weight },
+      ]
+    : null;
+
   // Pump curve only present when toggled on — unscale back to %.
   if (byName["pump"] !== undefined) {
     rows.push({
-      label: "Pumpe",
+      label: t("ui.series.pump"),
       value: fmt((byName["pump"] * 100) / Y_LEFT_MAX, 0),
       unit: "%",
       color: C.seriesPower,
@@ -242,9 +286,17 @@ function CustomTooltip({ active, label, payload, yWeightMax }: CustomTooltipProp
       }}
     >
       <div style={{ color: C.mut, marginBottom: 6, fontFamily: "'DM Sans', sans-serif" }}>
-        {fmt(label ?? null, 1)}s
+        {fmt(label ?? null, 1)}s{pairs && <span style={{ float: "right" }}>A / B</span>}
       </div>
-      {rows.map((r) => (
+      {pairs && pairs.map((r) => (
+        <div key={r.label} style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}>
+          <span style={{ color: C.mut }}>{r.label}</span>
+          <span>
+            <span style={{ color: r.ca }}>{r.a}</span> / <span style={{ color: r.cb }}>{r.b}</span> {r.unit}
+          </span>
+        </div>
+      ))}
+      {!pairs && rows.map((r) => (
         <div key={r.label} style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}>
           <span style={{ color: r.color }}>{r.label}</span>
           <span>{r.value !== "—" ? `${r.value} ${r.unit}` : "—"}</span>
@@ -273,13 +325,18 @@ function ShotChartInner({
   chartHeight = 220,
   fill = false,
   endedBadge = true,
+  title = null,
+  titleTail = null,
+  topInset = 0,
   overlay = null,
   stageOverlay = null,
   preinfusionEndS = null,
   showPump = false,
   ghosts = null,
   stageStrip = null,
+  compare = null,
 }: ShotChartProps) {
+  const { t } = useTranslation();
   const windowS         = xSettings?.window          ?? 30;
   const slideStepS      = xSettings?.slideStep        ?? 10;
   const resizeOnEnd     = xSettings?.resizeOnEnd      ?? true;
@@ -293,17 +350,29 @@ function ShotChartInner({
   // may have the SAME length but corrected (sanitized/post-brew) values. Keying
   // on length alone would skip that recompute. The hook only swaps the reference
   // on a genuine content change (live append, dedup-replace, DB swap).
-  const data = useMemo(() => samples.map((s) => ({
-    t: s.t,
-    pressure: s.pressure,
-    flow: s.flow,
-    // Temp goes on right axis — keep raw °C value
-    temp: s.temp,
-    // Weight scaled to left axis (0-12 range)
-    weight: s.weight !== null ? parseFloat(scaleWeight(s.weight, yWeightMax).toFixed(3)) : null,
-    // Pump power % scaled to the left axis (100% → Y_LEFT_MAX). Shape indicator.
-    pump: s.pumpPwm !== null ? parseFloat((s.pumpPwm * (Y_LEFT_MAX / 100)).toFixed(3)) : null,
-  })), [samples, yWeightMax]);
+  //
+  // Bezuege vergleichen: beide auf ein gemeinsames Zeitraster (shared/shot-compare),
+  // damit Cursor und Tooltip an beiden Kurven entlangfahren — B mit eigenen Schluesseln.
+  const data = useMemo<ChartRow[]>(() => {
+    const w = (g: number | null) => (g !== null ? parseFloat(scaleWeight(g, yWeightMax).toFixed(3)) : null);
+    if (compare) {
+      return mergeCompare(samples, compare).map((r) => ({
+        t: r.t, pressure: r.pressure, flow: r.flow, temp: null, weight: w(r.weight), pump: null,
+        bPressure: r.bPressure, bFlow: r.bFlow, bWeight: w(r.bWeight),
+      }));
+    }
+    return samples.map((s) => ({
+      t: s.t,
+      pressure: s.pressure,
+      flow: s.flow,
+      // Temp goes on right axis — keep raw °C value
+      temp: s.temp,
+      // Weight scaled to left axis (0-12 range)
+      weight: w(s.weight),
+      // Pump power % scaled to the left axis (100% → Y_LEFT_MAX). Shape indicator.
+      pump: s.pumpPwm !== null ? parseFloat((s.pumpPwm * (Y_LEFT_MAX / 100)).toFixed(3)) : null,
+    }));
+  }, [samples, yWeightMax, compare]);
 
   // SO-1: merge the commanded Soll overlay points into the chart data (own t
   // values, own keys; measured rows keep theirs). Recharts draws each series
@@ -361,13 +430,16 @@ function ShotChartInner({
   // Live: das Kurvenende ist die rechte Kante (stauchende Achse fuellt immer).
   const elapsed = live ? live.tipT : lastT;
 
+  // Im Vergleich reicht die Achse auch bis zum Ende des zweiten Bezugs.
+  const compareEndT = compare && compare.length > 0 ? compare[compare.length - 1].t : null;
   const { min: targetXMin, max: targetXMax } = useMemo(
     () => chartXDomain({
       elapsed, mode, grow, windowS, slideStepS, resizeOnEnd,
-      overlayEndT: overlay ? overlay.endT : null,
+      overlayEndT: overlay || compareEndT !== null ? Math.max(overlay?.endT ?? 0, compareEndT ?? 0) : null,
     }),
-    [elapsed, mode, grow, windowS, slideStepS, resizeOnEnd, overlay],
+    [elapsed, mode, grow, windowS, slideStepS, resizeOnEnd, overlay, compareEndT],
   );
+
 
   // Animated current domain — ease-out-cubic over 300ms.
   // Uses refs to read the true mid-animation values as animation start points,
@@ -461,18 +533,25 @@ function ShotChartInner({
         ...(fill ? { height: "100%", display: "flex", flexDirection: "column" } : {}),
       }}
     >
-      {/* Header: mode badge only (no legend in Variante C) */}
+      {/* Header: Profil links (Dashboard), Modus-Badge rechts (no legend in Variante C) */}
       <div
         style={{
           display: "flex",
           justifyContent: "flex-end",
           alignItems: "center",
+          gap: 10,
           paddingLeft: 12,
           paddingRight: 12,
           marginBottom: 8,
           minHeight: 18,
         }}
       >
+        {title && (
+          <div style={{ flex: 1, minWidth: 0, display: "flex", fontSize: 12, color: C.txtS, whiteSpace: "nowrap" }}>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+            {titleTail && <span style={{ flexShrink: 0, color: C.txt }}>&nbsp;· {titleTail}</span>}
+          </div>
+        )}
         {/* LIVE badge — only during brewing */}
         {mode === "brewing" && (
           <div
@@ -500,7 +579,7 @@ function ShotChartInner({
                 animation: "xenia-pulse 1.4s ease-in-out infinite",
               }}
             />
-            LIVE
+            {t("ui.chart.live")}
           </div>
         )}
 
@@ -519,7 +598,7 @@ function ShotChartInner({
               flexShrink: 0,
             }}
           >
-            BEZUG BEENDET
+            {t("ui.chart.shotEnded")}
           </div>
         )}
       </div>
@@ -528,7 +607,7 @@ function ShotChartInner({
       <div style={fill ? { flex: 1, minHeight: 0 } : undefined}>
       <ResponsiveContainer width="100%" height={fill ? "100%" : chartHeight}>
         {/* Stage overlay writes its marker labels above the plot — make room. */}
-        <ComposedChart data={chartData} margin={{ top: stageOverlay ? 16 : 4, right: showTempAxis ? RIGHT_MARGIN_TEMP : RIGHT_MARGIN_PLAIN, left: 0, bottom: 0 }}>
+        <ComposedChart data={chartData} margin={{ top: (stageOverlay ? 16 : 4) + topInset, right: showTempAxis ? RIGHT_MARGIN_TEMP : RIGHT_MARGIN_PLAIN, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="shotPressureFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={COLOR.pressure} stopOpacity={0.12} />
@@ -603,7 +682,7 @@ function ShotChartInner({
               poppt er auf Touch auf und bleibt hängen; Live-Werte stehen in den Tiles. */}
           {mode !== "brewing" && (
             <Tooltip
-              content={<CustomTooltip yWeightMax={yWeightMax} />}
+              content={<CustomTooltip yWeightMax={yWeightMax} paired={compare !== null} />}
               cursor={{ stroke: C.bdrL, strokeWidth: 1 }}
             />
           )}
@@ -632,7 +711,7 @@ function ShotChartInner({
                   x={preinfusionEndS}
                   stroke={C.bdr3}
                   strokeDasharray="2 3"
-                  label={{ value: "Extraktion", position: "insideTopLeft", fill: C.mut, fontSize: 8.5 }}
+                  label={{ value: t("ui.chart.extraction"), position: "insideTopLeft", fill: C.mut, fontSize: 8.5 }}
                 />
               )}
             </>
@@ -661,6 +740,16 @@ function ShotChartInner({
                 />
               }
             />
+          )}
+
+          {/* Zweiter Bezug im Vergleich: eigene Farben, gestrichelt, unter den Linien von A.
+              Das Gewicht von A ist selbst gestrichelt — das von B daher gepunktet. */}
+          {compare && mode !== "brewing" && (
+            <>
+              <Line yAxisId="main" dataKey="bPressure" name="bPressure" stroke={COLOR_B.pressure} strokeWidth={1.8} strokeDasharray="6 3" dot={false} isAnimationActive={false} />
+              <Line yAxisId="main" dataKey="bFlow" name="bFlow" stroke={COLOR_B.flow} strokeWidth={1.8} strokeDasharray="6 3" dot={false} isAnimationActive={false} />
+              <Line yAxisId="main" dataKey="bWeight" name="bWeight" stroke={COLOR_B.weight} strokeWidth={1.8} strokeDasharray="0.1 3.5" strokeLinecap="round" dot={false} isAnimationActive={false} />
+            </>
           )}
 
           {/* Pressure area fill (gradient behind line) */}
@@ -796,6 +885,7 @@ function ShotChartInner({
         <StageStrip
           strip={stageStrip.strip}
           firstDropS={stageStrip.firstDropS}
+          tail={stageStrip.tail ?? null}
           xMin={xDomain.min}
           xMax={xDomain.max}
           padLeft={Y_LEFT_WIDTH}
@@ -816,10 +906,14 @@ export const ShotChart = memo(ShotChartInner, (prev, next) =>
   prev.chartHeight            === next.chartHeight &&
   prev.fill                   === next.fill &&
   prev.endedBadge             === next.endedBadge &&
+  prev.title                  === next.title &&
+  prev.titleTail              === next.titleTail &&
+  prev.topInset               === next.topInset &&
   prev.overlay                === next.overlay &&
   prev.stageOverlay           === next.stageOverlay &&
   prev.preinfusionEndS        === next.preinfusionEndS &&
   prev.showPump               === next.showPump &&
   prev.ghosts                 === next.ghosts &&
-  prev.stageStrip             === next.stageStrip,
+  prev.stageStrip             === next.stageStrip &&
+  prev.compare                === next.compare,
 );

@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Scale, X } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { usePreShotData } from "../hooks/usePreShotData.js";
 import { usePreShotFieldSettings } from "../hooks/usePreShotFieldSettings.js";
@@ -23,6 +23,7 @@ import { useBaskets } from "../hooks/useBaskets.js";
 import { useBreakpoint } from "../hooks/useBreakpoint.js";
 import { formatDay } from "../lib/dates.js";
 import theme, { alpha } from "../theme.js";
+import { dec } from "../lib/num.js";
 
 const C = theme;
 
@@ -75,6 +76,8 @@ interface PreShotDialogProps {
   onClose: () => void;
   /** PT-2: live brew-group temperature (°C) for the readiness ampel. null = unknown. */
   liveBgTempC?: number | null;
+  /** Live-Gewicht der Waage (g) — bietet es als Dosis an. null = unbekannt. */
+  liveScaleG?: number | null;
   /** PT-2: current brew-group SETPOINT (°C) — gates the "Setzen" button. null = unknown. */
   currentBgSetpointC?: number | null;
   /** PT-2: current brew-boiler SETPOINT (°C) — also gates "Setzen" (both are set). null = unknown. */
@@ -121,9 +124,9 @@ const labelStyle: React.CSSProperties = {
 };
 
 /** `aside` steht rechts in der Beschriftungszeile — kostet keine Hoehe. */
-function Field({ label, aside, children }: { label: string; aside?: string | null; children: React.ReactNode }) {
+function Field({ label, aside, style, children }: { label: string; aside?: string | null; style?: React.CSSProperties; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 8 }}>
+    <div style={{ marginBottom: 8, ...style }}>
       {aside ? (
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <label style={labelStyle}>{label}</label>
@@ -139,7 +142,7 @@ function Field({ label, aside, children }: { label: string; aside?: string | nul
   );
 }
 
-const fmtG = (g: number) => (Number.isInteger(g) ? String(g) : g.toFixed(1)).replace(".", ",");
+const fmtG = (g: number) => dec(Number.isInteger(g) ? String(g) : g.toFixed(1));
 
 /** Mahlgrad-Schritt der Knoepfe — die Einstellungen liegen in halben Schritten. */
 const GRIND_STEP = 0.5;
@@ -152,6 +155,7 @@ const GRIND_STEP = 0.5;
 function GrindStepper({ value, onChange, inputStyle }: {
   value: string; onChange: (v: string) => void; inputStyle: React.CSSProperties;
 }) {
+  const { t } = useTranslation();
   const bump = (dir: 1 | -1) => {
     const n = parseFloat(value.replace(",", "."));
     if (!Number.isFinite(n)) return;
@@ -163,7 +167,7 @@ function GrindStepper({ value, onChange, inputStyle }: {
   };
   return (
     <div style={{ display: "flex", gap: 6 }}>
-      <button type="button" aria-label="Mahlgrad feiner" onClick={() => bump(-1)} style={btn}>−</button>
+      <button type="button" aria-label={t("ui.preshot.grindFiner")} onClick={() => bump(-1)} style={btn}>−</button>
       <input
         style={{ ...inputStyle, textAlign: "center" }}
         type="number"
@@ -171,7 +175,7 @@ function GrindStepper({ value, onChange, inputStyle }: {
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
-      <button type="button" aria-label="Mahlgrad gröber" onClick={() => bump(1)} style={btn}>+</button>
+      <button type="button" aria-label={t("ui.preshot.grindCoarser")} onClick={() => bump(1)} style={btn}>+</button>
     </div>
   );
 }
@@ -191,6 +195,7 @@ export function PreShotDialog({
   onStart,
   onClose,
   liveBgTempC,
+  liveScaleG = null,
   currentBgSetpointC,
   currentBbSetpointC,
   onSetFromProfile,
@@ -283,6 +288,7 @@ export function PreShotDialog({
   const [yieldOverrideG, setYieldOverrideG] = useState<number | null>(null);
   const [yieldPopupOpen, setYieldPopupOpen] = useState(false);
   const [yieldInput, setYieldInput]         = useState("");
+  const [ratioInput, setRatioInput]         = useState("");
 
   // Fetch the grind/RPM/dose prefill cascade for a bean+grinder pair and
   // write the result into the number fields. Called on the initial (non-repeat)
@@ -419,11 +425,19 @@ export function PreShotDialog({
   })();
 
   const doseMissing = doseWarn && doseG.trim() === "";
+  // Die Bohnen liegen auf der Waage: das Gewicht als Dosis anbieten, sobald es
+  // nach einer Dosis aussieht (nicht 0, keine Tasse).
+  const scaleDoseG = liveScaleG !== null && liveScaleG >= 3 && liveScaleG <= 40 ? Math.round(liveScaleG * 10) / 10 : null;
   const selectedGrinder = grinders.find((g) => g.id === grinderId) ?? null;
   const showRpm = fields.grinderRpm && selectedGrinder?.supportsRpm === true;
   // Die Profil-Notiz ist die einzige Notiz im Pre-Brew (Bezugs-Notizen werden
   // nach dem Bezug im Rating erfasst) — sie haengt an der Einstellung.
   const showProfileNotes = fields.profileNotes && !!profile.notes;
+  // Tablet/PC ohne Notiz: die Breite fuer zwei Feldspalten nutzen (Flavio 24.10.: „sehr
+  // gequetscht“) — Bohne ueber die ganze Breite, dann Muehle | Dosis, Mahlgrad | RPM.
+  const twoCol = !mobile && !showProfileNotes;
+  const cell = (order: number, full = false): React.CSSProperties | undefined =>
+    twoCol ? { order, ...(full ? { gridColumn: "1 / -1" } : {}) } : undefined;
 
   const rpmNum = grinderRpm.trim() === "" ? null : parseFloat(grinderRpm);
   const rpmOutOfRange =
@@ -463,9 +477,29 @@ export function PreShotDialog({
   const effectiveYieldG = yieldOverrideG ?? yieldG;
   const overrideActive = yieldOverrideG !== null && yieldOverrideG !== yieldG;
 
+  // Ratio: Yield und 1:x haengen ueber die eingetragene Dosis zusammen — nur,
+  // wenn das Profil eine Dosis abfragt und eine eingetragen ist.
+  const doseVal = fields.dose ? parseFloat(doseG) : NaN;
+  const hasDose = Number.isFinite(doseVal) && doseVal > 0;
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const ratioText = (r: number) => (lang === "de" ? String(round2(r)).replace(".", ",") : String(round2(r)));
+
   function openYieldPopup(): void {
     setYieldInput(effectiveYieldG !== null ? String(effectiveYieldG) : "");
+    setRatioInput(hasDose && effectiveYieldG !== null ? String(round2(effectiveYieldG / doseVal)) : "");
     setYieldPopupOpen(true);
+  }
+
+  function changeYieldInput(v: string): void {
+    setYieldInput(v);
+    const n = parseFloat(v);
+    if (hasDose) setRatioInput(Number.isFinite(n) && n > 0 ? String(round2(n / doseVal)) : "");
+  }
+
+  function changeRatioInput(v: string): void {
+    setRatioInput(v);
+    const r = parseFloat(v);
+    if (hasDose && Number.isFinite(r) && r > 0) setYieldInput(String(Math.round(doseVal * r * 10) / 10));
   }
 
   function applyYieldPopup(): void {
@@ -586,9 +620,9 @@ export function PreShotDialog({
           // 14 px oben und unten: so passt der Dialog bei 1072×590 ohne
           // Scrollen (vorher 4 px zu hoch, gemessen 533 bei 529 Platz).
           padding: "14px 24px 14px",
-          // The profile note gets its own column beside the fields — that needs
-          // room the 440px single-column dialog does not have.
-          width: showProfileNotes ? "min(760px, 96vw)" : "min(440px, 96vw)",
+          // Tablet/PC immer breit: neben den Feldern steht die Notiz, ohne Notiz
+          // laufen die Felder zweispaltig. Am Handy ohne Notiz schmal wie bisher.
+          width: showProfileNotes || !mobile ? "min(760px, 96vw)" : "min(440px, 96vw)",
           maxHeight: "90vh",
           overflowY: "auto",
           boxShadow: `0 8px 40px ${alpha(C.black, 0.5)}`,
@@ -711,10 +745,13 @@ export function PreShotDialog({
                   {effectiveYieldG}
                 </span>{" "}
                 g {t("preshot.yield")}
+                {hasDose && (
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace" }}> · 1:{ratioText(effectiveYieldG / doseVal)}</span>
+                )}
               </span>
             ) : (
               <span style={{ color: C.mut }}>
-                — g, {t("preshot.yieldSetHint")}
+                {t("preshot.noYield")}, {t("preshot.yieldSetHint")}
               </span>
             )}
             {overrideActive && (
@@ -847,9 +884,9 @@ export function PreShotDialog({
             {t("preshot.loading")}
           </div>
         ) : (
-          <>
+          <div style={twoCol ? { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", columnGap: 16 } : undefined}>
             {/* Bean — immer, ausser beim Messlauf */}
-            {!measurement && <Field label={t("preshot.bean")}>
+            {!measurement && <Field label={t("preshot.bean")} style={cell(0, true)}>
               <BeanPicker
                 beans={beans}
                 value={beanId}
@@ -901,7 +938,7 @@ export function PreShotDialog({
 
             {/* Grinder */}
             {fields.grinder && (
-              <Field label={t("preshot.grinder")}>
+              <Field label={t("preshot.grinder")} style={cell(1)}>
                 <select
                   style={inputStyle}
                   value={grinderId === null ? "" : String(grinderId)}
@@ -921,14 +958,14 @@ export function PreShotDialog({
 
             {/* Grind setting */}
             {fields.grindSetting && (
-              <Field label={t("preshot.grindSetting")} aside={grindAside}>
+              <Field label={t("preshot.grindSetting")} aside={grindAside} style={cell(3)}>
                 <GrindStepper value={grindSetting} onChange={(v) => { setGrindSetting(v); setGrindSource(null); }} inputStyle={numInputStyle} />
               </Field>
             )}
 
             {/* RPM — only when the selected grinder supports it */}
             {showRpm && (
-              <Field label={t("preshot.grinderRpm")}>
+              <Field label={t("preshot.grinderRpm")} style={cell(4)}>
                 <input
                   style={{
                     ...numInputStyle,
@@ -959,19 +996,37 @@ export function PreShotDialog({
 
             {/* Dose */}
             {fields.dose && (
-              <Field label={`${t("preshot.dose")} (g)`}>
-                <input
-                  ref={doseRef}
-                  style={doseMissing ? { ...numInputStyle, borderColor: C.red } : numInputStyle}
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  value={doseG}
-                  onChange={(e) => {
-                    setDoseG(e.target.value);
-                    if (e.target.value.trim() !== "") setDoseWarn(false);
-                  }}
-                />
+              <Field label={`${t("preshot.dose")} (g)`} style={cell(2)}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    ref={doseRef}
+                    style={{ ...numInputStyle, flex: 1, minWidth: 0, ...(doseMissing ? { borderColor: C.red } : {}) }}
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={doseG}
+                    onChange={(e) => {
+                      setDoseG(e.target.value);
+                      if (e.target.value.trim() !== "") setDoseWarn(false);
+                    }}
+                  />
+                  {scaleDoseG !== null && (
+                    <button
+                      type="button"
+                      onClick={() => { setDoseG(String(scaleDoseG)); setDoseWarn(false); }}
+                      title={t("preshot.doseFromScale")}
+                      aria-label={t("preshot.doseFromScale")}
+                      style={{
+                        flexShrink: 0, display: "flex", alignItems: "center", gap: 5, padding: "0 10px", borderRadius: 7,
+                        border: `1px solid ${alpha(C.acc, 0.55)}`, background: alpha(C.acc, 0.12), color: C.acc,
+                        fontSize: 13, fontFamily: "'JetBrains Mono', monospace", cursor: "pointer", whiteSpace: "nowrap",
+                      }}
+                    >
+                      <Scale size={14} />
+                      {fmtG(scaleDoseG)} g
+                    </button>
+                  )}
+                </div>
                 {doseMissing && (
                   <div style={{ fontSize: 11.5, color: C.red, marginTop: 5 }}>
                     {t("preshot.doseMissing")}
@@ -982,7 +1037,7 @@ export function PreShotDialog({
                           onClick={() => { setDoseG(String(lastDoseG)); setDoseWarn(false); }}
                           style={{ background: "transparent", border: "none", padding: 0, color: C.acc, fontSize: 11.5, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
                         >
-                          {t("preshot.doseLast").replace("{g}", String(lastDoseG).replace(".", ","))}
+                          {t("preshot.doseLast").replace("{g}", dec(String(lastDoseG)))}
                         </button>
                       </>
                     )}
@@ -991,7 +1046,7 @@ export function PreShotDialog({
               </Field>
             )}
 
-          </>
+          </div>
         )}
         </div>
 
@@ -1009,7 +1064,9 @@ export function PreShotDialog({
             }}
           >
             <div style={{ ...labelStyle, marginBottom: 6 }}>{t("preshot.profileNotes")}</div>
-            <div style={{ fontSize: 12.5, color: C.txtS, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+            {/* Hoechstens 4 Zeilen — eine uebernommene Decent-Beschreibung ist lang, der
+                Dialog darf nicht scrollen. Der ganze Text steht im Editor („Notiz“). */}
+            <div style={{ fontSize: 12.5, color: C.txtS, lineHeight: 1.5, whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
               {profile.notes}
             </div>
           </aside>
@@ -1137,22 +1194,46 @@ export function PreShotDialog({
             {t("preshot.yieldEditTitle")}
           </h2>
 
-          <Field label={`${t("preshot.yield")} (g)`}>
-            <input
-              autoFocus
-              style={numInputStyle}
-              type="number"
-              inputMode="decimal"
-              step={0.5}
-              value={yieldInput}
-              placeholder={t("preshot.yieldPlaceholder")}
-              onChange={(e) => { setYieldInput(e.target.value); }}
-              onKeyDown={(e) => { if (e.key === "Enter") applyYieldPopup(); }}
-            />
-            <div style={{ fontSize: 11, color: C.mut, marginTop: 4 }}>
-              {t("preshot.yieldEmptyHint")}
+          {/* Yield und Ratio nebeneinander — beide ueber die Dosis gekoppelt. */}
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Field label={`${t("preshot.yield")} (g)`}>
+                <input
+                  autoFocus
+                  style={numInputStyle}
+                  type="number"
+                  inputMode="decimal"
+                  step={0.5}
+                  value={yieldInput}
+                  placeholder={t("preshot.yieldPlaceholder")}
+                  onChange={(e) => { changeYieldInput(e.target.value); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") applyYieldPopup(); }}
+                />
+              </Field>
             </div>
-          </Field>
+            {fields.dose && (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Field label={t("preshot.ratio")}>
+                  <input
+                    style={{ ...numInputStyle, opacity: hasDose ? 1 : 0.5 }}
+                    type="number"
+                    inputMode="decimal"
+                    step={0.05}
+                    disabled={!hasDose}
+                    value={ratioInput}
+                    placeholder={hasDose ? "2" : "–"}
+                    onChange={(e) => { changeRatioInput(e.target.value); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") applyYieldPopup(); }}
+                  />
+                </Field>
+              </div>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: C.mut, margin: "-4px 0 8px" }}>
+            {t("preshot.yieldEmptyHint")}
+            {fields.dose && !hasDose && <> · {t("preshot.ratioNeedsDose")}</>}
+            {hasDose && <> · {t("preshot.ratioDose", { g: String(doseVal).replace(".", lang === "de" ? "," : ".") })}</>}
+          </div>
 
           {hasCmd27 && (
             <div

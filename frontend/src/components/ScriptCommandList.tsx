@@ -13,18 +13,21 @@ import { GripVertical, HelpCircle, Trash2, Lock } from "lucide-react";
 import type { ParsedCmd } from "@shared/types.js";
 import { CMD_HELP, CMD_ARGS, type ArgField, type CmdHelp } from "@shared/script-help.js";
 import { editableRange } from "@shared/script-edit.js";
+import { useTranslation } from "../i18n/index.js";
 import theme from "../theme.js";
+import { dec } from "../lib/num.js";
 
 const C = theme;
 const MONO = "'JetBrains Mono', monospace";
 
-const SOURCE_LABEL: Record<CmdHelp["source"], { text: string; color: string }> = {
-  gemessen: { text: "an dieser Maschine gemessen", color: C.grn },
-  xenia: { text: "laut Xenia", color: C.acc },
-  "nicht erprobt": { text: "hier nicht erprobt", color: C.org },
+const SOURCE_LABEL: Record<CmdHelp["source"], { key: "measured" | "xenia" | "untested"; color: string }> = {
+  gemessen: { key: "measured", color: C.grn },
+  xenia: { key: "xenia", color: C.acc },
+  "nicht erprobt": { key: "untested", color: C.org },
 };
 
 export function HelpBody({ help }: { help: CmdHelp }) {
+  const { t } = useTranslation();
   const src = SOURCE_LABEL[help.source];
   return (
     <div style={{ fontSize: 12.5, lineHeight: 1.5, color: C.txtS }}>
@@ -34,7 +37,7 @@ export function HelpBody({ help }: { help: CmdHelp }) {
           {help.details.map((d, i) => <li key={i} style={{ marginBottom: 3 }}>{d}</li>)}
         </ul>
       )}
-      <span style={{ fontSize: 10.5, color: src.color }}>● {src.text}</span>
+      <span style={{ fontSize: 10.5, color: src.color }}>● {t(`scriptEditor.commandList.source.${src.key}`)}</span>
     </div>
   );
 }
@@ -42,7 +45,7 @@ export function HelpBody({ help }: { help: CmdHelp }) {
 /** Zahlenfeld mit Einheit; nimmt Komma und Punkt, uebernimmt beim Verlassen. */
 function ArgInput({ field, raw, onChange }: { field: ArgField; raw: number; onChange: (raw: number) => void }) {
   const shown = raw / field.scale;
-  const fmt = (v: number) => String(Number(v.toFixed(3))).replace(".", ",");
+  const fmt = (v: number) => dec(String(Number(v.toFixed(3))));
   const [text, setText] = useState(fmt(shown));
   useEffect(() => { setText(fmt(shown)); }, [shown]); // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => {
@@ -86,6 +89,7 @@ interface Props {
 interface DragState { from: number; pointerId: number; mids: { i: number; mid: number }[]; to: number }
 
 export function ScriptCommandList({ cmds, selected, overridden, onSelect, onArg, onMove, onRemove }: Props) {
+  const { t } = useTranslation();
   const { first, last } = editableRange(cmds);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -163,7 +167,7 @@ export function ScriptCommandList({ cmds, selected, overridden, onSelect, onArg,
                   onPointerCancel={endDrag}
                   onClick={(e) => e.stopPropagation()}
                   style={{ width: 22, height: 30, display: "inline-flex", alignItems: "center", justifyContent: "center", color: C.mut, cursor: "grab", touchAction: "none" }}
-                  aria-label="Verschieben"
+                  aria-label={t("scriptEditor.commandList.move")}
                 >
                   <GripVertical size={17} />
                 </span>
@@ -172,8 +176,8 @@ export function ScriptCommandList({ cmds, selected, overridden, onSelect, onArg,
                 flex: "1 1 130px", minWidth: 0, fontSize: 13.5, fontWeight: fixed ? 500 : 600,
                 color: fixed ? C.mut : isOver ? C.mut : C.txt, textDecoration: isOver ? "line-through" : "none",
               }}>
-                {help?.title ?? `Befehl ${c.cmd}`}
-                {isOver && <span style={{ fontSize: 10, color: C.org, fontWeight: 600, marginLeft: 6, textDecoration: "none", display: "inline-block" }}>läuft nie — kein Warten danach</span>}
+                {help?.title ?? t("scriptEditor.commandList.commandFallback", { cmd: c.cmd })}
+                {isOver && <span style={{ fontSize: 10, color: C.org, fontWeight: 600, marginLeft: 6, textDecoration: "none", display: "inline-block" }}>{t("scriptEditor.commandList.neverRuns")}</span>}
               </span>
               {fields.length > 0 && (
                 <span className="scr-fields" style={{ display: "inline-flex", flexWrap: "wrap", gap: 10 }}>
@@ -186,7 +190,7 @@ export function ScriptCommandList({ cmds, selected, overridden, onSelect, onArg,
               {help && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setHelpOpen(helpOpen === i ? null : i); }}
-                  aria-label="Hilfe"
+                  aria-label={t("scriptEditor.commandList.help")}
                   style={{ background: "transparent", border: "none", padding: 4, cursor: "pointer", color: helpOpen === i ? C.acc : C.mut, display: "inline-flex" }}
                 >
                   <HelpCircle size={16} />
@@ -195,7 +199,7 @@ export function ScriptCommandList({ cmds, selected, overridden, onSelect, onArg,
               {!fixed && (
                 <button
                   onClick={(e) => { e.stopPropagation(); onRemove(i); }}
-                  aria-label="Löschen"
+                  aria-label={t("scriptEditor.commandList.delete")}
                   style={{ background: "transparent", border: "none", padding: 4, cursor: "pointer", color: C.mut, display: "inline-flex" }}
                 >
                   <Trash2 size={15} />

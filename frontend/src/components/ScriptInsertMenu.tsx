@@ -8,6 +8,7 @@ import { useState } from "react";
 import { HelpCircle, X } from "lucide-react";
 import { CMD_HELP, INSERTABLE_CMDS } from "@shared/script-help.js";
 import { HelpBody } from "./ScriptCommandList.js";
+import { useTranslation } from "../i18n/index.js";
 import theme from "../theme.js";
 
 const C = theme;
@@ -16,16 +17,17 @@ const sectionLabel: React.CSSProperties = { fontSize: 9, color: C.mut, fontWeigh
 export const modalTitle: React.CSSProperties = { margin: "0 0 10px", fontSize: 15, fontWeight: 600, color: C.txt };
 export const modalText: React.CSSProperties = { margin: "0 0 10px", fontSize: 13, lineHeight: 1.5, color: C.txtS };
 
-export function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+export function Modal({ children, onClose, width = 460 }: { children: React.ReactNode; onClose: () => void; width?: number }) {
+  const { t } = useTranslation();
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.overlay, zIndex: 220 }} />
       <div style={{
         position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)", zIndex: 221,
-        width: "min(460px, 94vw)", maxHeight: "86vh", overflowY: "auto", background: C.cardElev,
+        width: `min(${width}px, 94vw)`, maxHeight: "86vh", overflowY: "auto", background: C.cardElev,
         border: `1px solid ${C.bdrL}`, borderRadius: 14, padding: 18,
       }}>
-        <button onClick={onClose} aria-label="Schließen" style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: C.mut, cursor: "pointer", display: "flex" }}>
+        <button onClick={onClose} aria-label={t("scriptEditor.modal.close")} style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: C.mut, cursor: "pointer", display: "flex" }}>
           <X size={17} />
         </button>
         {children}
@@ -35,17 +37,18 @@ export function Modal({ children, onClose }: { children: React.ReactNode; onClos
 }
 
 export function InsertMenu({ onPick }: { onPick: (cmd: number) => void }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState<number | null>(null);
   const groups = ["Pumpe", "Zeit", "Ventile", "Waage", "Temperatur", "Sonstiges"] as const;
   return (
     <>
-      <h3 style={modalTitle}>Befehl einfügen</h3>
+      <h3 style={modalTitle}>{t("scriptEditor.insertMenu.title")}</h3>
       {groups.map((g) => {
         const items = INSERTABLE_CMDS.filter((id) => CMD_HELP[id]?.group === g);
         if (!items.length) return null;
         return (
           <div key={g} style={{ marginBottom: 10 }}>
-            <div style={{ ...sectionLabel, marginBottom: 5 }}>{g}</div>
+            <div style={{ ...sectionLabel, marginBottom: 5 }}>{t(`scriptEditor.insertMenu.groups.${g}`)}</div>
             {items.map((id) => {
               const h = CMD_HELP[id]!;
               return (
@@ -60,11 +63,11 @@ export function InsertMenu({ onPick }: { onPick: (cmd: number) => void }) {
                     >
                       <div style={{ fontSize: 13, fontWeight: 600 }}>
                         {h.title}
-                        {h.source === "nicht erprobt" && <span style={{ fontSize: 10, color: C.org, fontWeight: 500, marginLeft: 6 }}>nicht erprobt</span>}
+                        {h.source === "nicht erprobt" && <span style={{ fontSize: 10, color: C.org, fontWeight: 500, marginLeft: 6 }}>{t("scriptEditor.insertMenu.untested")}</span>}
                       </div>
                       <div style={{ fontSize: 11.5, color: C.mut, marginTop: 2 }}>{h.summary}</div>
                     </button>
-                    <button onClick={() => setOpen(open === id ? null : id)} aria-label="Hilfe"
+                    <button onClick={() => setOpen(open === id ? null : id)} aria-label={t("scriptEditor.insertMenu.help")}
                       style={{ background: "transparent", border: "none", color: open === id ? C.acc : C.mut, cursor: "pointer", padding: 4, display: "flex" }}>
                       <HelpCircle size={16} />
                     </button>

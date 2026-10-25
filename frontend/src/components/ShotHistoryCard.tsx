@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import { hasRating, ratedWithoutStars } from "@shared/shot-rating.js";
-import { Pencil, Trash2, StickyNote, Repeat, AlertTriangle, ShieldAlert, Star, ClipboardCheck, MoreHorizontal } from "lucide-react";
+import { Pencil, Trash2, StickyNote, Repeat, AlertTriangle, ShieldAlert, Star, ClipboardCheck, MoreHorizontal, ArrowLeftRight } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { stopModeLabel } from "../lib/stopMode.js";
 import { formatDay } from "../lib/dates.js";
@@ -70,10 +70,14 @@ interface ShotHistoryCardProps {
   /** Flag/move (or clear) the Best-Brew reference. Only shown for brew shots. */
   onToggleBest?: (shot: ShotListItem, makeBest: boolean) => void;
   onDelete: (shot: ShotListItem) => void;
+  /** Bezuege vergleichen: diesen als A nehmen und den zweiten antippen. */
+  onCompare?: (shot: ShotListItem) => void;
+  /** Ist A eines laufenden Vergleichs — hervorgehoben. */
+  highlight?: boolean;
   mobile?: boolean;
 }
 
-export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit, onRepeat, repeatBlocked, onToggleBest, onDelete, mobile = false }: ShotHistoryCardProps) {
+export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit, onRepeat, repeatBlocked, onToggleBest, onDelete, onCompare, highlight = false, mobile = false }: ShotHistoryCardProps) {
   const { t, lang } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const dateLabel = formatAbsoluteDate(shot.startedAt, lang === "de" ? "de-DE" : "en-US");
@@ -141,8 +145,8 @@ export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit,
         minHeight: 54,
         boxSizing: "border-box",
         padding: "6px 10px 6px 14px",
-        background: C.card,
-        border: `1px solid ${C.bdr}`,
+        background: highlight ? C.accG : C.card,
+        border: `1px solid ${highlight ? C.accB : C.bdr}`,
         borderRadius: 12,
         cursor: onOpen ? "pointer" : "default",
       }}
@@ -170,7 +174,7 @@ export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit,
             </span>
           )}
           {hasNotes && <StickyNote size={12} color={C.mut} style={{ flexShrink: 0 }} aria-label={t("history.hasNotes")} />}
-          {ratedHidden && <ClipboardCheck size={12} color={C.mut} style={{ flexShrink: 0 }} aria-label="bewertet ohne Note" />}
+          {ratedHidden && <ClipboardCheck size={12} color={C.mut} style={{ flexShrink: 0 }} aria-label={t("ui.history.ratedNoStars")} />}
         </div>
         {/* Bezugsnummer: die Kennung, unter der ein Bezug in Notizen und
             Gespraechen auftaucht — ohne sie ist er nur "der von Dienstag". */}
@@ -254,6 +258,9 @@ export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit,
           >
             {onEdit && (
               <MenuItem icon={<Pencil size={15} />} label={t("history.edit")} onClick={() => { setMenuOpen(false); onEdit(shot); }} />
+            )}
+            {onCompare && (
+              <MenuItem icon={<ArrowLeftRight size={15} />} label={t("history.compare.action")} onClick={() => { setMenuOpen(false); onCompare(shot); }} />
             )}
             <div style={{ height: 1, background: C.bdr, margin: "5px 4px" }} />
             <MenuItem icon={<Trash2 size={15} />} label={t("history.delete")} danger onClick={() => { setMenuOpen(false); onDelete(shot); }} />

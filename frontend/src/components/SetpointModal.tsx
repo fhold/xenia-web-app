@@ -12,6 +12,7 @@
 import { useState } from "react";
 import { Minus, Plus, X } from "lucide-react";
 import type { SetpointsUpdateRequest } from "@shared/types";
+import { useTranslation } from "../i18n/index.js";
 
 type GaugeTarget = "brewGroup" | "brewBoiler";
 
@@ -30,11 +31,6 @@ const C = theme;
 
 const STEP = 0.5;
 
-const LABEL: Record<GaugeTarget, string> = {
-  brewGroup:  "Brühgruppe Temperatur",
-  brewBoiler: "Brühboiler Temperatur",
-};
-
 const KEY: Record<GaugeTarget, keyof SetpointsUpdateRequest> = {
   brewGroup:  "brewGroupTargetC",
   brewBoiler: "brewBoilerTargetC",
@@ -47,6 +43,11 @@ export function SetpointModal({
   onSave,
   onClose,
 }: SetpointModalProps) {
+  const { t } = useTranslation();
+  const label: Record<GaugeTarget, string> = {
+    brewGroup:  t("ui.setpoint.brewGroup"),
+    brewBoiler: t("ui.setpoint.brewBoiler"),
+  };
   // Start from the current setpoint, or round the live value to nearest 0.5
   const initial =
     setpoint !== undefined
@@ -118,7 +119,7 @@ export function SetpointModal({
                 fontWeight: 600,
               }}
             >
-              {LABEL[gauge]}
+              {label[gauge]}
             </span>
             <button
               onClick={onClose}
@@ -166,7 +167,7 @@ export function SetpointModal({
               <span style={{ fontSize: 12, color: C.mut, marginLeft: 4 }}>°C</span>
               {setpoint !== undefined && (
                 <div style={{ fontSize: 10, color: C.mut, marginTop: 4 }}>
-                  Ist: {currentValue.toFixed(1)} °C
+                  {t("ui.setpoint.current", { v: currentValue.toFixed(1) })}
                 </div>
               )}
             </div>
@@ -196,7 +197,7 @@ export function SetpointModal({
                 fontFamily: "inherit",
               }}
             >
-              Abbrechen
+              {t("ui.common.cancel")}
             </button>
             <button
               onClick={() => { void handleSave(); }}
@@ -215,7 +216,7 @@ export function SetpointModal({
                 fontFamily: "inherit",
               }}
             >
-              Setzen
+              {t("ui.setpoint.set")}
             </button>
           </div>
         </div>

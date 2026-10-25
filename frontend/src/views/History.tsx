@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SlidersHorizontal, ChevronLeft, X } from "lucide-react";
+import { SlidersHorizontal, ChevronLeft, X, ArrowLeftRight, Star } from "lucide-react";
 import { useShots, DEFAULT_SHOT_FILTERS } from "../hooks/useShots.js";
 import { makeUniqueRoastingLabels } from "../lib/roastingFilterLabel.js";
 import { formatDay } from "../lib/dates.js";
@@ -19,8 +19,9 @@ import { useBaskets, basketName } from "../hooks/useBaskets.js";
 import { ShotHistoryCard, HISTORY_COLS } from "../components/ShotHistoryCard.js";
 import { ShotDetailModal } from "../components/ShotDetailModal.js";
 import { ShotEditModal } from "../components/ShotEditModal.js";
+import { ShotCompareView } from "../components/ShotCompareView.js";
 import { useTranslation } from "../i18n/index.js";
-import type { ShotListItem, ShotSortKey } from "@shared/types.js";
+import type { CompareSuggestions, ShotListItem, ShotSortKey } from "@shared/types.js";
 import theme from "../theme.js";
 
 const C = theme;
@@ -40,6 +41,21 @@ const selectStyle: React.CSSProperties = {
   fontFamily: "inherit",
   outline: "none",
   boxSizing: "border-box",
+};
+
+const suggestBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "5px 10px",
+  borderRadius: 7,
+  fontSize: 12,
+  fontFamily: "inherit",
+  cursor: "pointer",
+  background: C.accG,
+  border: `1px solid ${C.accB}`,
+  color: C.accLight,
+  whiteSpace: "nowrap",
 };
 
 const fieldLabelStyle: React.CSSProperties = {
@@ -180,7 +196,7 @@ interface HistoryProps {
   /** Zurueck-Knopf, wenn man per Sprung hergekommen ist. */
   onBack?: () => void;
   /** Klick auf den Profilnamen in der Detailansicht: Profil im Editor oeffnen. */
-  onOpenProfile?: (profileId: number) => void;
+  onOpenProfile?: (profileId: number, variantId?: number | null) => void;
 }
 
 export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat, initialBeanId = null, initialProfileId = null, initialFilters = null, initialShotId = null, onLocationState, onBack, onOpenProfile }: HistoryProps) {
@@ -244,6 +260,27 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
   const [datePreset, setDatePreset] = useState<DatePreset>("all");
   const [detailShot, setDetailShot] = useState<ShotListItem | null>(null);
   const [editShot, setEditShot] = useState<ShotListItem | null>(null);
+
+  // Bezuege vergleichen: A gewaehlt → Leiste unten; der naechste Tipp auf eine
+  // Zeile oeffnet den Vergleich statt des Details. Nach dem Schliessen bleibt A
+  // gewaehlt, damit man gleich gegen einen anderen Bezug vergleichen kann.
+  const [compareFrom, setCompareFrom] = useState<ShotListItem | null>(null);
+  const [compareTo, setCompareTo] = useState<ShotListItem | null>(null);
+  const [suggestions, setSuggestions] = useState<CompareSuggestions | null>(null);
+  useEffect(() => {
+    setSuggestions(null);
+    if (compareFrom === null) return;
+    let alive = true;
+    fetch(`/api/shots/${compareFrom.id}/compare-suggestions`)
+      .then((r) => (r.ok ? (r.json() as Promise<CompareSuggestions>) : null))
+      .then((sg) => { if (alive) setSuggestions(sg); })
+      .catch(() => { /* ohne Vorschlaege weiter */ });
+    return () => { alive = false; };
+  }, [compareFrom]);
+  const openRow = (s: ShotListItem) => {
+    if (compareFrom === null) setDetailShot(s);
+    else if (s.id !== compareFrom.id) setCompareTo(s);
+  };
 
   // BB-a deep-link: reset to defaults on arrival, then page until the target
   // shot is loaded and open its detail (it may sit past the first page).
@@ -633,8 +670,10 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
               basketName={basketName(baskets, shot.basketId)}
               variantName={variantName(shot)}
               mobile={mobile}
-              onOpen={setDetailShot}
+              onOpen={openRow}
               onEdit={setEditShot}
+              onCompare={setCompareFrom}
+              highlight={compareFrom?.id === shot.id}
               onRepeat={onRepeat}
               repeatBlocked={repeatBlocked}
               onToggleBest={(s, makeBest) => { void toggleBestBrew(s.id, makeBest); }}
@@ -660,7 +699,64 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
           onRepeat={(s) => { setDetailShot(null); onRepeat(s); }}
           repeatBlocked={repeatBlocked}
           onToggleBest={(s, makeBest) => { void toggleBestBrew(s.id, makeBest); }}
-          onOpenProfile={onOpenProfile ? (id) => { setDetailShot(null); onOpenProfile(id); } : undefined}
+          onOpenProfile={onOpenProfile ? (id, variantId) => { setDetailShot(null); onOpenProfile(id, variantId); } : undefined}
+          onCompare={(s) => { setDetailShot(null); setCompareFrom(s); }}
+        />
+      )}
+
+      {/* Vergleich: Leiste unten, solange A gewaehlt ist */}
+      {compareFrom && (
+        <>
+          {/* Platz, damit die Leiste die letzte Zeile nicht verdeckt (Handy: zweizeilig) */}
+          <div style={{ height: mobile ? 110 : 64 }} />
+          <div
+            style={{
+              position: "fixed", left: 0, right: 0, bottom: "calc(14px + env(safe-area-inset-bottom))", zIndex: 50,
+              display: "flex", justifyContent: "center", padding: "0 12px", pointerEvents: "none",
+            }}
+          >
+            <div
+              style={{
+                pointerEvents: "auto", maxWidth: 760, width: "100%", boxSizing: "border-box",
+                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                padding: "8px 10px 8px 14px", borderRadius: 12,
+                background: C.cardElev, border: `1px solid ${C.accB}`,
+                boxShadow: `0 12px 36px ${C.overlay}`,
+              }}
+            >
+              <ArrowLeftRight size={15} color={C.acc} style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 160, fontSize: 13, color: C.txt }}>
+                {t("history.compare.banner", { id: compareFrom.id, profile: compareFrom.profileName })}
+              </span>
+              {suggestions?.reference && (
+                <button onClick={() => setCompareTo(suggestions.reference)} style={suggestBtn} title={t("history.compare.suggestReferenceTip")}>
+                  <Star size={12} fill={C.acc} color={C.acc} />#{suggestions.reference.id}
+                </button>
+              )}
+              {suggestions?.previous && (
+                <button onClick={() => setCompareTo(suggestions.previous)} style={suggestBtn} title={t("history.compare.suggestPreviousTip")}>
+                  {t("history.compare.suggestPrevious", { id: suggestions.previous.id })}
+                </button>
+              )}
+              <button
+                onClick={() => { setCompareFrom(null); }}
+                style={{ ...suggestBtn, border: "none", color: C.mut }}
+              >
+                {t("history.compare.cancel")}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {compareFrom && compareTo && (
+        <ShotCompareView
+          a={compareFrom}
+          b={compareTo}
+          mobile={mobile}
+          variantName={variantName}
+          onOpenShot={(s) => { setCompareTo(null); setDetailShot(s); }}
+          onClose={() => setCompareTo(null)}
         />
       )}
 

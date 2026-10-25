@@ -8,6 +8,7 @@
 
 import type { ConnectionState } from "../hooks/useXeniaFrame.js";
 import type { MachineState, MachineStatus, Shot } from "@shared/types.js";
+import { t } from "../i18n/index.js";
 
 /**
  * Whether the machine is in a state where a new shot may be started, based on
@@ -53,14 +54,14 @@ export function startBlockedReason(args: {
   machineStatus: MachineStatus | null | undefined;
   activeShot: Shot | null;
 }): string | null {
-  if (args.connectionState !== "connected") return "Keine Verbindung zur Maschine.";
+  if (args.connectionState !== "connected") return t("ui.readiness.noConnection");
   if (args.activeShot !== null) {
-    return "Der laufende Bezug wird noch abgeschlossen (Nachlauf und Auswertung). Gleich wieder möglich.";
+    return t("ui.readiness.finishing");
   }
   if (!canStartShotFromState(args.connectionState, args.machineState, args.machineStatus)) {
     // Ein Satz fuer alle Faelle (aus, Nachlauf, Draining): ob sie aus ist, sieht
     // man ohnehin — "einschalten" war nach einem Bezug schlicht falsch.
-    return "Maschine nicht bereit. Bitte kurz warten.";
+    return t("ui.readiness.notReady");
   }
   return null;
 }

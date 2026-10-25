@@ -69,7 +69,7 @@ export function GrinderEditor({ grinder, onSave, onDelete, onClose }: GrinderEdi
   const [deleting, setDeleting]     = useState(false);
 
   const handleSave = useCallback(async () => {
-    if (!name.trim()) { setSaveError("Name ist erforderlich."); return; }
+    if (!name.trim()) { setSaveError(t("ui.grinder.nameRequired")); return; }
     setSaving(true);
     setSaveError(null);
     try {

@@ -33,6 +33,7 @@ import type { ConnectionState } from "../hooks/useXeniaFrame.js";
 import type { MachineControlHook } from "../hooks/useMachineControl.js";
 import type { LiveFrame, MachineState } from "@shared/types";
 import theme from '../theme';
+import { t, useTranslation } from "../i18n/index.js";
 
 // ---------------------------------------------------------------------------
 // State → colour + label mapping (exported for re-use in App.tsx TopBar)
@@ -40,19 +41,32 @@ import theme from '../theme';
 
 export interface StateConfig {
   color: string;
-  label: string;
   pulse: boolean;
 }
 
 export const STATE_CONFIG: Record<MachineState, StateConfig> = {
-  disconnected: { color: theme.dim, label: "OFFLINE",    pulse: false },
-  off:          { color: theme.dim, label: "AUS",        pulse: false },
-  heating:      { color: theme.red, label: "HEIZT",      pulse: false },
-  ready:        { color: theme.grn, label: "BEREIT",     pulse: false },
-  eco:          { color: theme.blu, label: "ECO",        pulse: false },
-  brewing:      { color: theme.acc, label: "BEZUG",      pulse: true  },
-  draining:     { color: theme.acc, label: "ENTLEEREN",  pulse: false },
+  disconnected: { color: theme.dim, pulse: false },
+  off:          { color: theme.dim, pulse: false },
+  heating:      { color: theme.red, pulse: false },
+  ready:        { color: theme.grn, pulse: false },
+  eco:          { color: theme.blu, pulse: false },
+  brewing:      { color: theme.acc, pulse: true  },
+  draining:     { color: theme.acc, pulse: false },
 };
+
+/** Label of a machine state — read at render time so it follows the language. */
+export function stateLabel(state: MachineState): string {
+  const labels: Record<MachineState, string> = {
+    disconnected: t("ui.machine.state.disconnected"),
+    off:          t("ui.machine.state.off"),
+    heating:      t("ui.machine.state.heating"),
+    ready:        t("ui.machine.state.ready"),
+    eco:          t("ui.machine.state.eco"),
+    brewing:      t("ui.machine.state.brewing"),
+    draining:     t("ui.machine.state.draining"),
+  };
+  return labels[state];
+}
 
 // ---------------------------------------------------------------------------
 // Design tokens
@@ -71,12 +85,12 @@ export type ViewId =
   | "beans"
   | "settings";
 
-const NAV_ITEMS: { id: ViewId; label: string; Icon: LucideIcon }[] = [
-  { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
-  { id: "profiles",  label: "Profile",   Icon: Layers },
-  { id: "history",   label: "History",   Icon: Clock },
-  { id: "beans",     label: "Bohnen",    Icon: Bean },
-  { id: "settings",  label: "Settings",  Icon: Settings },
+const navItems = (): { id: ViewId; label: string; Icon: LucideIcon }[] => [
+  { id: "dashboard", label: t("ui.sidebar.nav.dashboard"), Icon: LayoutDashboard },
+  { id: "profiles",  label: t("ui.sidebar.nav.profiles"),  Icon: Layers },
+  { id: "history",   label: t("ui.sidebar.nav.history"),   Icon: Clock },
+  { id: "beans",     label: t("ui.sidebar.nav.beans"),     Icon: Bean },
+  { id: "settings",  label: t("ui.sidebar.nav.settings"),  Icon: Settings },
 ];
 
 // ---------------------------------------------------------------------------
@@ -113,6 +127,7 @@ export function Sidebar({
   onToggleCollapse,
   onClose,
 }: SidebarProps) {
+  useTranslation(); // re-render on language change (labels come from t())
   // Treat 'connecting' as 'disconnected' for display purposes
   const displayState: MachineState =
     connectionState === "connecting" ? "disconnected" : machineState;
@@ -133,12 +148,12 @@ export function Sidebar({
   const powerColor = powerIsOff ? C.dim : C.grn;
   const powerBg    = powerIsOff ? C.dimG : C.grnD;
   const powerBorder = `1px solid ${powerColor}30`;
-  const powerLabel = powerIsOff ? "OFF" : "ON";
+  const powerLabel = powerIsOff ? t("ui.machine.powerOff") : t("ui.machine.powerOn");
 
   // ---- Steam button ----
   const steamColor = steamOn ? C.red : C.blu;
   const steamBg    = steamOn ? C.redD : C.bluD;
-  const steamLabel = steamOn ? "Hot" : "Cold";
+  const steamLabel = steamOn ? t("ui.machine.steamHot") : t("ui.machine.steamCold");
 
   // ---- ECO button: binary toggle ----
   // eco → blue active; off/disconnected → disabled; other → dimmed, click enters eco
@@ -195,7 +210,7 @@ export function Sidebar({
               flex: 1,
             }}
           >
-            {stateConf.label}
+            {stateLabel(displayState)}
           </span>
         )}
         {onClose && (
@@ -225,7 +240,7 @@ export function Sidebar({
           gap: 2,
         }}
       >
-        {NAV_ITEMS.map(({ id, label, Icon }) => {
+        {navItems().map(({ id, label, Icon }) => {
           const active = activeView === id;
           return (
             <button
@@ -353,7 +368,7 @@ export function Sidebar({
       {onToggleCollapse && (
         <button
           onClick={onToggleCollapse}
-          title={collapsed ? "Sidebar ausklappen" : "Sidebar einklappen"}
+          title={collapsed ? t("ui.sidebar.expand") : t("ui.sidebar.collapse")}
           style={{
             display: "flex",
             alignItems: "center",

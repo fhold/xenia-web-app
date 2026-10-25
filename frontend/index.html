@@ -2,7 +2,9 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- maximum-scale=1: iOS zoomt sonst beim Antippen jedes Felds unter 16 px hinein und bleibt
+         vergrößert; Zoomen mit zwei Fingern erlaubt iOS trotzdem. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
     <title>Xenia</title>
 
     <!-- PWA / standalone app (Add-to-Home-Screen) -->
@@ -36,26 +38,32 @@
         overscroll-behavior-y: none; /* no pull-to-refresh / overscroll bounce */
       }
 
-      /* Dark UA widgets: without this the browser renders scrollbars, select
-         popups and number spinners in the light scheme. */
+      /* Farben aus dem Farbschema (theme.ts applyTheme setzt die Variablen,
+         color-scheme steuert Scrollbalken, Auswahllisten und Zahlenfelder des
+         Browsers). Die Werte hier sind die von „Dunkel“ — bis das Skript läuft. */
+      :root {
+        --bg: #0B0D11;
+        --txt: #E2E4EA;
+        --scroll: #2C3444;
+        --scroll-hover: #3A4055;
+      }
       html {
         color-scheme: dark;
         scrollbar-width: thin;                    /* Firefox — inherits downwards */
-        scrollbar-color: #2C3444 transparent;
+        scrollbar-color: var(--scroll) transparent;
       }
       ::-webkit-scrollbar { width: 10px; height: 10px; }
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb {
-        background: #2C3444;
+        background: var(--scroll);
         border-radius: 999px;
         /* padding-box keeps the thumb inset on any panel background */
         border: 2px solid transparent;
         background-clip: padding-box;
       }
-      ::-webkit-scrollbar-thumb:hover { background: #3A4055; background-clip: padding-box; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); background-clip: padding-box; }
       ::-webkit-scrollbar-corner { background: transparent; }
 
-      /* theme.bg / theme.txt — synced with src/theme.ts, update both if changing */
       /* Zahlenfelder app-weit ohne Spinner: die Pfeile reservieren Breite und
          zerreissen jede kompakte Inline-Zeile (Limiter, Exit-Chips). */
       input[type=number]::-webkit-outer-spin-button,
@@ -63,8 +71,8 @@
       input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 
       body {
-        background-color: #0B0D11;
-        color: #E2E4EA;
+        background-color: var(--bg);
+        color: var(--txt);
         font-family: 'DM Sans', system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;

@@ -386,3 +386,62 @@ test("Fluss übernehmen (Gagne) übersteht Phasen ↔ Stufen und die Prüfung; n
   const bad = validateBrewSteps([{ kind: "flow", targetFlowGs: 1, adoptFlow: "ja" as never, exit: {} }]);
   assert.equal(bad.ok, false);
 });
+
+test("Schnell füllen übersteht Phasen ↔ Stufen; „normal“ wird nicht gespeichert (Hash bleibt)", async () => {
+  const { validateBrewSteps } = await import("../src/brew-steps.js");
+  const fast: BrewStep[] = [
+    { kind: "preinfusion", gentleness: "normal", exit: { weightG: 1, pressureBar: 4, seconds: 25 }, fill: "fast" },
+    { kind: "pressure", targetPressureBar: 9, rampMs: 3000, exit: { seconds: 7 } },
+  ];
+  assert.deepEqual(projectSteps(fast).map(phaseToStep), fast);
+  assert.deepEqual(validateBrewSteps(fast), { ok: true });
+  // ohne Feld = normal: zurückgeschrieben ohne „fill“, also derselbe Inhalt wie vorher
+  const normal: BrewStep[] = [{ kind: "preinfusion", gentleness: "normal", exit: { seconds: 25 } }];
+  assert.deepEqual(projectSteps(normal).map(phaseToStep), normal);
+  assert.equal(validateBrewSteps([{ kind: "preinfusion", fill: "voll" as never, exit: {} }]).ok, false);
+});
+
+test("Ton am Phasenende übersteht Phasen ↔ Stufen, braucht die App und ist gültig", async () => {
+  const { validateBrewSteps } = await import("../src/brew-steps.js");
+  const steps: BrewStep[] = [
+    { kind: "pressure", targetPressureBar: 3, tone: true, exit: { seconds: 10 } },
+    { kind: "power", power: 50, exit: { seconds: 5 } },
+  ];
+  assert.deepEqual(projectSteps(steps).map(phaseToStep), steps);
+  assert.deepEqual(validateBrewSteps(steps), { ok: true });
+  // Ohne Ton ginge die Kurve ins Skript — mit Ton nur in der App, sonst klingt er nie.
+  const la = laufart(projectSteps(steps));
+  assert.equal(la.engine, "app");
+  assert.deepEqual(la.app, ["Ton am Phasenende in Phase 1"]);
+  assert.equal(laufart(projectSteps([{ ...steps[0]!, tone: undefined }, steps[1]!])).engine, "script");
+  assert.equal(validateBrewSteps([{ kind: "power", power: 50, tone: "ja" as never, exit: { seconds: 5 } }]).ok, false);
+});
+
+test("Ausstieg „Fluss über“: Stufe ↔ Phase ohne Verlust, nur in der App, gültig", async () => {
+  const { validateBrewSteps } = await import("../src/brew-steps.js");
+  const steps: BrewStep[] = [
+    { kind: "pressure", targetPressureBar: 3, exit: { flowAboveGs: 1.5, seconds: 20 } },
+    { kind: "flow", targetFlowGs: 1.5, exit: {} },
+  ];
+  assert.deepEqual(validateBrewSteps([{ kind: "pressure", targetPressureBar: 3, exit: { flowAboveGs: 1.5 } }, steps[1]!]), { ok: true });
+  const phases = projectSteps(steps);
+  assert.deepEqual(phases[0]!.exits, [{ kind: "flowAbove", value: 1.5 }, { kind: "time", value: 20 }]);
+  assert.deepEqual(phaseToStep(phases[0]!).exit, { flowAboveGs: 1.5, seconds: 20 });
+  assert.ok(laufart(phases).app.some((r) => r.includes("Fluss ≥")));
+});
+
+test("Druck übernehmen: Stufe ↔ Phase ohne Verlust, nur in der App, Kurve „Druck halten ≈“", async () => {
+  const { validateBrewSteps } = await import("../src/brew-steps.js");
+  const { stepsToTimeline } = await import("../src/steps-curve.js");
+  const steps: BrewStep[] = [
+    { kind: "flow", targetFlowGs: 2, exit: { pressureBar: 4 } },
+    { kind: "pressure", targetPressureBar: 6, adoptPressure: true, exit: {} },
+  ];
+  assert.deepEqual(validateBrewSteps(steps), { ok: true });
+  assert.equal(validateBrewSteps([{ kind: "pressure", targetPressureBar: 6, adoptPressure: "ja" as unknown as boolean, exit: {} }]).ok, false);
+  const phases = projectSteps(steps);
+  assert.equal(phases[1]!.adoptPressure, true);
+  assert.deepEqual(phaseToStep(phases[1]!), steps[1]);
+  assert.ok(laufart(phases).app.some((r) => r.includes("Druck vom Puck")));
+  assert.match(stepsToTimeline(steps, null).phases[1]!.label, /Druck halten ≈ 6 bar/);
+});

@@ -28,6 +28,7 @@
 
 import type { ParsedScript, ParsedCmd } from "./types.js";
 import { CMD_ARGS, CMD_HELP } from "./script-help.js";
+import { L } from "./shared-lang.js";
 
 /** Nominal width (ms) used for an indeterminate wait (Cmd 25/26/27). The band is
  *  shaded + labelled by the frontend; the width is NOT to scale. */
@@ -134,13 +135,13 @@ function num(x: number | string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-// Dezimalkomma wie im Skript-Editor und in der Befehlsliste.
+// Dezimalkomma wie im Skript-Editor und in der Befehlsliste (englisch: Punkt).
 function fmtS(ms: number): string {
   const s = ms / 1000;
-  return Number.isInteger(s) ? String(s) : s.toFixed(1).replace(".", ",");
+  return Number.isInteger(s) ? String(s) : s.toFixed(1).replace(".", L(",", "."));
 }
 function fmtV(v: number): string {
-  return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(".", ",");
+  return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(".", L(",", "."));
 }
 
 const EMPTY: ScriptTimeline = {
@@ -175,17 +176,17 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
       tempSetpoints.push({ t: T, value: temp });
       const tStart = T;
       T += INDETERMINATE_WAIT_MS;
-      waits.push({ kind: "temp", value: temp, label: `bis ${fmtV(temp)} °C`, tStart, tEnd: T });
+      waits.push({ kind: "temp", value: temp, label: L(`bis ${fmtV(temp)} °C`, `until ${fmtV(temp)} °C`), tStart, tEnd: T });
     } else if (c.cmd === 26) {
       const bar = num(c.args[0]) / 1000;
       const tStart = T;
       T += INDETERMINATE_WAIT_MS;
-      waits.push({ kind: "pressure", value: bar, label: `bis ${fmtV(bar)} bar`, tStart, tEnd: T });
+      waits.push({ kind: "pressure", value: bar, label: L(`bis ${fmtV(bar)} bar`, `until ${fmtV(bar)} bar`), tStart, tEnd: T });
     } else if (c.cmd === 27) {
       const g = num(c.args[0]);
       const tStart = T;
       T += INDETERMINATE_WAIT_MS;
-      waits.push({ kind: "weight", value: g, label: `bis ${fmtV(g)} g`, tStart, tEnd: T });
+      waits.push({ kind: "weight", value: g, label: L(`bis ${fmtV(g)} g`, `until ${fmtV(g)} g`), tStart, tEnd: T });
     }
   }
   const totalMs = T;
@@ -251,9 +252,11 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
 
     const label =
       c.cmd === 6
-        ? "Pumpe aus"
+        ? L("Pumpe aus", "Pump off")
         : c.cmd === 3
-          ? rampDur > 0 ? `Leistung → ${fmtV(rawTarget)} % in ${fmtS(rampDur)} s` : `Leistung ${fmtV(rawTarget)} %`
+          ? rampDur > 0
+            ? L(`Leistung → ${fmtV(rawTarget)} % in ${fmtS(rampDur)} s`, `Power → ${fmtV(rawTarget)} % in ${fmtS(rampDur)} s`)
+            : L(`Leistung ${fmtV(rawTarget)} %`, `Power ${fmtV(rawTarget)} %`)
           : rampDur > 0 ? `→ ${fmtV(rawTarget)} ${unit} in ${fmtS(rampDur)} s` : `${fmtV(rawTarget)} ${unit}`;
 
     phases.push({
@@ -291,15 +294,15 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
     const t = tAt[i];
     switch (c.cmd) {
       case 1:  markers.push({ t, kind: "start", label: "Start" }); break;
-      case 2:  markers.push({ t, kind: "pump_on", label: "Pumpe an" }); break;
-      case 7:  markers.push({ t, kind: "end", label: "Ende" }); break;
-      case 13: markers.push({ t, kind: "valve_open", label: "Bezugsventil auf" }); break;
-      case 14: markers.push({ t, kind: "valve_close", label: "Bezugsventil zu" }); break;
-      case 15: markers.push({ t, kind: "drain_valve_open", label: "Ablassventil auf" }); break;
-      case 16: markers.push({ t, kind: "drain_valve_close", label: "Ablassventil zu" }); break;
-      case 17: markers.push({ t, kind: "drain", label: "Entleeren & Beenden" }); break;
-      case 20: markers.push({ t, kind: "tone", label: "Signalton" }); break;
-      case 31: markers.push({ t, kind: "restore_temp", label: "Soll-Temp wiederherstellen" }); break;
+      case 2:  markers.push({ t, kind: "pump_on", label: L("Pumpe an", "Pump on") }); break;
+      case 7:  markers.push({ t, kind: "end", label: L("Ende", "End") }); break;
+      case 13: markers.push({ t, kind: "valve_open", label: L("Bezugsventil auf", "Open brew valve") }); break;
+      case 14: markers.push({ t, kind: "valve_close", label: L("Bezugsventil zu", "Close brew valve") }); break;
+      case 15: markers.push({ t, kind: "drain_valve_open", label: L("Ablassventil auf", "Open drain valve") }); break;
+      case 16: markers.push({ t, kind: "drain_valve_close", label: L("Ablassventil zu", "Close drain valve") }); break;
+      case 17: markers.push({ t, kind: "drain", label: L("Entleeren & Beenden", "Drain & finish") }); break;
+      case 20: markers.push({ t, kind: "tone", label: L("Signalton", "Beep") }); break;
+      case 31: markers.push({ t, kind: "restore_temp", label: L("Soll-Temp wiederherstellen", "Restore target temp") }); break;
       case 29: pressureLimitBar = num(c.args[0]); break;
       case 30: flowLimitMlS = num(c.args[0]); break;
       default:
@@ -313,9 +316,9 @@ export function scriptToTimeline(parsed: ParsedScript | null | undefined): Scrip
   return { phases, waits, tempSetpoints, pressureLimitBar, flowLimitMlS, markers, totalMs };
 }
 
-/** Zahl wie im Skript-Editor: hoechstens drei Nachkommastellen, Dezimalkomma. */
+/** Zahl wie im Skript-Editor: hoechstens drei Nachkommastellen, Dezimalkomma (englisch: Punkt). */
 function fmtDe(v: number): string {
-  return String(Number(v.toFixed(3))).replace(".", ",");
+  return String(Number(v.toFixed(3))).replace(".", L(",", "."));
 }
 
 /**
@@ -332,7 +335,8 @@ export function describeCmdLine(c: ParsedCmd): { label: string; detail: string }
   const v = fields.map((f, i) => fmtDe(num(c.args[i]) / f.scale));
   const withUnit = (i: number) => `${v[i]} ${fields[i].unit}`;
   let detail: string;
-  if (fields[1]?.label === "Übergang") detail = `${withUnit(0)} in ${v[1]} s`;
+  // Pumpenbefehle 3/4/5: zweites Feld ist der Übergang (Rampe) — nach Befehl, nicht nach dem (übersetzten) Feldnamen.
+  if (c.cmd === 3 || c.cmd === 4 || c.cmd === 5) detail = `${withUnit(0)} in ${v[1]} s`;
   else if (c.cmd === 20) detail = `${v[0]} × ${withUnit(1)}`;
   else detail = fields.map((_, i) => withUnit(i)).join(" · ");
   return { label, detail };

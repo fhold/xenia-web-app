@@ -4,6 +4,7 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SqliteSettingsRepo } from "../db/settings-repo.js";
+import { UI_THEME_PATTERN, checkColorSchemes } from "../../../shared/src/color-scheme.js";
 
 // ---------------------------------------------------------------------------
 // Whitelist — which keys may be mutated via PUT /api/settings/:key
@@ -23,6 +24,8 @@ interface SettingDef {
   values?: string[];
   /** Format constraint — for type "string" only. */
   pattern?: RegExp;
+  /** Further check for type "string" — an error message, or null if fine. */
+  check?: (value: string) => string | null;
 }
 
 const ALLOWED: Record<string, SettingDef> = {
@@ -49,6 +52,13 @@ const ALLOWED: Record<string, SettingDef> = {
   language:                      { type: "enum",    values: ["de", "en"] },
   show_tds_input:                { type: "boolean" },
   rating_compare_prev:           { type: "boolean" },
+  // Bewertung: welche Felder der Dialog zeigt (Gesamtnote, Channeling, Notiz immer)
+  rating_field_acidity:          { type: "boolean" },
+  rating_field_bitterness:       { type: "boolean" },
+  rating_field_taste:            { type: "boolean" },
+  rating_field_extraction:       { type: "boolean" },
+  rating_field_grind_note:       { type: "boolean" },
+  rating_field_facts:            { type: "boolean" },
   bean_fields_origin:            { type: "boolean" },
   bean_fields_inventory:         { type: "boolean" },
   bean_fields_aroma:             { type: "boolean" },
@@ -62,6 +72,9 @@ const ALLOWED: Record<string, SettingDef> = {
   backflush_reminder_enabled:    { type: "boolean" },
   backflush_reminder_days:       { type: "number",  min: 1, max: 365 },
   backflush_profile_ids:         { type: "string",  pattern: /^(\d+(,\d+)*)?$/ }, // "" or "2,7"
+  // Oberfläche: Darstellung und eigene Farbschemata (shared/color-scheme.ts)
+  ui_theme:                      { type: "string",  pattern: UI_THEME_PATTERN },
+  ui_color_schemes:              { type: "string",  check: checkColorSchemes },
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +107,8 @@ function validate(key: string, rawValue: string): ValidationResult {
     if (def.pattern && !def.pattern.test(rawValue)) {
       return { ok: false, error: `${key} has an invalid format` };
     }
+    const problem = def.check?.(rawValue) ?? null;
+    if (problem !== null) return { ok: false, error: problem };
     return { ok: true, normalized: rawValue };
   }
 
@@ -184,6 +199,24 @@ export function registerSettingsRoutes(
       grinderRpm:   (settingsRepo.get("preshot_field_grinder_rpm")   ?? "true")  === "true",
       dose:         (settingsRepo.get("preshot_field_dose")          ?? "true")  === "true",
       profileNotes: (settingsRepo.get("preshot_field_profile_notes") ?? "true")  === "true",
+    };
+  });
+
+  /**
+   * GET /api/settings/rating-fields
+   *
+   * Welche Felder der Bewertungsdialog zeigt — Standard: alle. Gesamtnote,
+   * Channeling und Notiz sind immer da; ausgeblendete Werte bleiben gespeichert.
+   */
+  app.get("/api/settings/rating-fields", async () => {
+    const on = (key: string) => (settingsRepo.get(key) ?? "true") === "true";
+    return {
+      acidity:    on("rating_field_acidity"),
+      bitterness: on("rating_field_bitterness"),
+      taste:      on("rating_field_taste"),
+      extraction: on("rating_field_extraction"),
+      grindNote:  on("rating_field_grind_note"),
+      facts:      on("rating_field_facts"),
     };
   });
 

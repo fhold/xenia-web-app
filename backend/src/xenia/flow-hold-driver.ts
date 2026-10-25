@@ -39,17 +39,19 @@ import type {
   BrewStep,
   StepExit,
   FlowControllerKind,
+  DriveStage,
 } from "../../../shared/src/types.js";
 import { PIController } from "../../../shared/src/pi-controller.js";
 import { AdaptiveController } from "../../../shared/src/adaptive-flow-controller.js";
 import type { FlowController } from "../../../shared/src/flow-controller.js";
 import { BrewByWeightController } from "../../../shared/src/brew-by-weight.js";
-import { validateBrewSteps } from "../../../shared/src/brew-steps.js";
+import { endsWithoutYield, validateBrewSteps } from "../../../shared/src/brew-steps.js";
 import {
   DEFAULT_PUMP_CURVE,
   parsePumpCurve,
   preinfusionArrivalGs,
   preinfusionPower,
+  pressureRampFeedForward,
   type PumpCurve,
 } from "../../../shared/src/pump-curve.js";
 import {
@@ -78,8 +80,10 @@ import type { Logger } from "../log.js";
 export interface FlowHoldConfig {
   /** Target scale-flow to hold (g/s). */
   targetFlowGs: number;
-  /** Yield target (g) — resolved from the profile/override before start. */
-  yieldTargetG: number;
+  /** Yield target (g) — resolved from the profile/override before start. null =
+   *  kein Ziel: keine Waagen-Abschaltung, die letzte Stufe beendet den Bezug ueber
+   *  ihre Ausstiege (Decent-Profil ohne Zielgewicht). */
+  yieldTargetG: number | null;
   /** Output floor (%) — dead-zone / minimum pump power that still pumps. */
   powerFloor: number;
   /** Output ceiling (%). */
@@ -243,7 +247,9 @@ export class FlowHoldDriver {
   private pumpOnMs = 0;
 
   private controller: FlowController | null = null;
-  private pressureController: FlowController | null = null;
+  private pressureController: PIController | null = null;
+  /** Solldruck des letzten Takts — fuer die Vorsteuerung einer fallenden Rampe. */
+  private lastPressureSoll: number | null = null;
   private bbw: BrewByWeightController | null = null;
 
   // Resolved step sequence + stage-machine bookkeeping. Steps run in one paddle
@@ -324,6 +330,9 @@ export class FlowHoldDriver {
 
   private shotLog: Logger | null = null;
 
+  /** Jeder Stufenwechsel (auch Stufe 0) — index.ts reicht ihn an die Clients weiter. */
+  onStage: ((stage: DriveStage) => void) | null = null;
+
   constructor(
     private readonly client: XeniaClient,
     private readonly recorder: ShotRecorder,
@@ -346,7 +355,7 @@ export class FlowHoldDriver {
    */
   async start(
     overrides: FlowHoldOverrides | undefined,
-    yieldTargetG: number,
+    yieldTargetG: number | null,
     arm: DriveArmArgs,
     lastFrame: LiveFrame | null,
   ): Promise<FlowHoldConfig> {
@@ -425,7 +434,7 @@ export class FlowHoldDriver {
       slewUpPerS: cfg.slewUpPerS,
       slewDownPerS: cfg.slewDownPerS,
     });
-    this.bbw = new BrewByWeightController(cfg.yieldTargetG, cfg.bbwWindowMs, cfg.bbwResidualLagS);
+    this.bbw = cfg.yieldTargetG !== null ? new BrewByWeightController(cfg.yieldTargetG, cfg.bbwWindowMs, cfg.bbwResidualLagS) : null;
 
     // Enter step 0 directly — no ramp phase. enterStage seeds the controller and
     // records the ramp bookkeeping; it performs no machine write. The first pump
@@ -477,7 +486,7 @@ export class FlowHoldDriver {
         initial_power: initialPower,
       },
       `Flow-hold start — ${controllerKind}, target=${cfg.targetFlowGs}g/s, ` +
-        `steps=${steps.length}, yield=${cfg.yieldTargetG}g, initial=${initialPower}%`,
+        `steps=${steps.length}, yield=${cfg.yieldTargetG ?? "– (endet mit der letzten Stufe)"}g, initial=${initialPower}%`,
     );
 
     try {
@@ -573,6 +582,8 @@ export class FlowHoldDriver {
 
     // Staged setpoint: advance to the next step when this step's exit is met.
     this.maybeAdvanceStage(frame, weight, now);
+    // Ohne Ziel kann die letzte Stufe den Bezug eben beendet haben — dann keine Pumpe mehr.
+    if (this.stopRequested) return;
 
     const active = this.steps[this.stageIndex];
     const power = this.computeStepPower(active, frame, flow, dtMs, now);
@@ -585,8 +596,8 @@ export class FlowHoldDriver {
     // seconds, and drive mode has no machine tare — feeding that to BBW would
     // fire an instant false stop (shot #117). BBW is only fed post-grace, so it
     // projects from real extraction weight, exactly like the script path.
-    if (!this.stopRequested && weight !== null && elapsed >= WATCHDOG_GRACE_MS) {
-      const res = this.bbw!.addSample(now, weight);
+    if (this.bbw !== null && !this.stopRequested && weight !== null && elapsed >= WATCHDOG_GRACE_MS) {
+      const res = this.bbw.addSample(now, weight);
       if (res.shouldStop) {
         this.shotLog?.info(
           {
@@ -629,15 +640,20 @@ export class FlowHoldDriver {
   private resolveSteps(
     raw: BrewStep[] | undefined,
     flatFlowGs: number,
-    yieldG: number,
+    yieldG: number | null,
   ): BrewStep[] {
     if (!raw || raw.length === 0) {
+      if (yieldG === null) throw new Error("Ohne Ziel braucht der Bezug Stufen, deren letzte einen Ausstieg hat.");
       return [{ kind: "flow", targetFlowGs: flatFlowGs, exit: { weightG: yieldG } }];
     }
     // The same rule the profile API applies on save. A sequence stored before
     // that check existed is still caught here, at the last gate before the pump.
     const check = validateBrewSteps(raw);
     if (!check.ok) throw new Error(check.error);
+    // Ohne Ziel ist die letzte Stufe das Ende — ohne Ausstieg liefe die Pumpe bis zur Grenze.
+    if (yieldG === null && !endsWithoutYield(raw)) {
+      throw new Error("Ohne Ziel braucht die letzte Stufe einen Ausstieg (Zeit, Gewicht, Druck oder Fluss).");
+    }
     return raw;
   }
 
@@ -679,7 +695,25 @@ export class FlowHoldDriver {
    * is left to the BBW yield stop, so it is never advanced past.
    */
   private maybeAdvanceStage(frame: LiveFrame, weight: number | null, now: number): void {
-    if (this.stageIndex >= this.steps.length - 1) return;
+    if (this.stageIndex >= this.steps.length - 1) {
+      // Ohne Ziel beendet die letzte Stufe den Bezug ueber ihre Ausstiege (wie
+      // bei der Decent ein Profil ohne Zielgewicht). Mit Ziel stoppt die Waage.
+      if (this.cfg!.yieldTargetG === null && !this.stopRequested) {
+        const last = this.steps[this.stageIndex]!;
+        const end = this.stepExitMet(last.exit, now - this.stageStartAt, weight, frame.pumpPressureBar, this.lastPlausibleFlowGs);
+        if (end !== null) {
+          const leaving = this.stageTransitions[this.stageTransitions.length - 1];
+          if (leaving) leaving.exitReason = this.exitReasonField(end);
+          this.recorder.setDriveStages(this.stageTransitions);
+          this.shotLog?.info(
+            { event: "profile_end_stop", stage_index: this.stageIndex, by: end, weight_g: weight, elapsed_ms: now - this.startedAt },
+            `Profile end — last stage exit (${end}), no yield target`,
+          );
+          this.beginNormalStop(now, "flowhold");
+        }
+      }
+      return;
+    }
     const step = this.steps[this.stageIndex];
     const flow = this.lastPlausibleFlowGs;
     // Preinfusion: fertig, sobald der Kaffee in der Tasse ankommt — die naechste
@@ -722,17 +756,19 @@ export class FlowHoldDriver {
       stepKind: step.kind === "preinfusion" ? "power" : step.kind,
       // Bei „Fluss uebernehmen“ der uebernommene Wert, nicht der erwartete.
       targetFlowGs: step.kind === "flow" ? this.stageTarget : null,
-      targetPressureBar: step.kind === "pressure" ? step.targetPressureBar : null,
+      // Bei „Druck uebernehmen“ ebenso der uebernommene Wert.
+      targetPressureBar: step.kind === "pressure" ? this.stageTarget : null,
       targetPower: step.kind === "power" ? step.power : null,
       exitReason: null,
       enteredAt,
     });
     this.recorder.setDriveStages(this.stageTransitions);
+    this.onStage?.({ index, kind: step.kind, name: step.name?.trim() || null, tone: step.tone === true });
   }
 
   /** Map the internal advance reason to the persisted StepExit field name. */
   private exitReasonField(
-    by: "seconds" | "weight" | "pressure" | "pressure_below" | "flow" | "arrived",
+    by: "seconds" | "weight" | "pressure" | "pressure_below" | "flow" | "flow_above" | "arrived",
   ): ShotStageInput["exitReason"] {
     switch (by) {
       case "arrived":
@@ -747,6 +783,8 @@ export class FlowHoldDriver {
         return "pressureBelowBar";
       case "flow":
         return "flowGs";
+      case "flow_above":
+        return "flowAboveGs";
     }
   }
 
@@ -762,7 +800,7 @@ export class FlowHoldDriver {
     weight: number | null,
     pressureBar: number,
     flowGs: number,
-  ): "seconds" | "weight" | "pressure" | "pressure_below" | "flow" | null {
+  ): "seconds" | "weight" | "pressure" | "pressure_below" | "flow" | "flow_above" | null {
     if (exit.seconds !== undefined && inStageMs >= exit.seconds * 1000) return "seconds";
     if (exit.weightG !== undefined && weight !== null && weight >= exit.weightG) return "weight";
     if (exit.pressureBar !== undefined && pressureBar >= exit.pressureBar) return "pressure";
@@ -771,6 +809,7 @@ export class FlowHoldDriver {
       else if (this.declineArmed) return "pressure_below";
     }
     if (exit.flowGs !== undefined && flowGs <= exit.flowGs) return "flow";
+    if (exit.flowAboveGs !== undefined && flowGs >= exit.flowAboveGs) return "flow_above";
     return null;
   }
 
@@ -813,11 +852,14 @@ export class FlowHoldDriver {
         // letzten Druck-Sollwert. Nach einer Preinfusion waere der 0 — bei 4 bar
         // im Puck laese die Regelung „viel zu viel Druck“ und naehme die Pumpe
         // zurueck, bevor sie hochfaehrt.
-        this.stageRampFrom = rampMs > 0 ? this.lastPressureBar : step.targetPressureBar;
-        this.stageTarget = step.targetPressureBar;
+        // Decent HOLD-P: das Ziel ist der Druck, den der Puck beim Eintritt hat.
+        const target = step.adoptPressure ? this.adoptedPressure(step.targetPressureBar) : step.targetPressureBar;
+        this.stageRampFrom = rampMs > 0 ? this.lastPressureBar : target;
+        this.stageTarget = target;
         this.stageRampMs = rampMs;
         this.pressureController!.seed(seedPower);
         this.pressureController!.setSetpoint(this.stageRampFrom);
+        this.lastPressureSoll = this.stageRampFrom;
         break;
       }
       case "power": {
@@ -855,7 +897,18 @@ export class FlowHoldDriver {
         return out;
       }
       case "pressure": {
-        this.pressureController!.setSetpoint(this.rampedSetpoint(now));
+        const soll = this.rampedSetpoint(now);
+        // Fallende Rampe: den Arbeitspunkt mitfuehren, statt dass der I-Anteil ihn ueber
+        // einen bleibenden Fehler nachholt (#285: im Mittel 0,7 bar ueber dem Soll).
+        // Steigende Rampen bleiben, wie sie sind — dort begrenzen Anstiegsgrenze und
+        // Pumpe ohnehin (Druckspitze von Adaptive Gagné · 9 bar).
+        if (this.lastPressureSoll !== null && soll < this.lastPressureSoll) {
+          this.pressureController!.shift(
+            pressureRampFeedForward(this.pumpCurve, soll - this.lastPressureSoll, frame.pumpPressureBar, flow),
+          );
+        }
+        this.lastPressureSoll = soll;
+        this.pressureController!.setSetpoint(soll);
         const out = this.pressureController!.update(frame.pumpPressureBar, dtMs).output;
         if (step.maxFlowGs !== undefined && flow > step.maxFlowGs) {
           return this.backOff();
@@ -881,6 +934,7 @@ export class FlowHoldDriver {
           frame.pumpPressureBar,
           now - this.stageStartAt,
           step.rampMs,
+          step.fill,
         );
     }
   }
@@ -1366,6 +1420,11 @@ export class FlowHoldDriver {
     const n = this.recentFlow.length;
     const avg = n ? this.recentFlow.reduce((a, f) => a + f.gs, 0) / n : 0;
     return avg > this.cfg!.minFlowForEst ? Math.round(avg * 100) / 100 : expected;
+  }
+
+  /** Druck beim Eintritt (auf 0,1 bar); ohne Druck (unter 0,5 bar) der erwartete Wert. */
+  private adoptedPressure(expected: number): number {
+    return this.lastPressureBar >= 0.5 ? Math.round(this.lastPressureBar * 10) / 10 : expected;
   }
 
   private resetState(): void {

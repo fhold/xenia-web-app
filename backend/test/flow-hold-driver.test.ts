@@ -806,6 +806,31 @@ test("a pressure step raises power when measured pressure is under setpoint", as
   );
 });
 
+test("Fallende Druckrampe: die Pumpe geht mit dem Soll zurück, auch wenn der Druck genau auf dem Soll liegt", async () => {
+  // Vorher hielt der PI bei Fehler null seine Leistung — er holte die Rampe nur über
+  // einen bleibenden Fehler nach (#285: im Mittel 0,7 bar über dem Soll).
+  const { driver, calls } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { steps: [
+      { kind: "power", power: 60, exit: { pressureBar: 9 } },
+      { kind: "pressure", targetPressureBar: 0.1, rampMs: 10000, exit: { seconds: 20 } },
+    ] },
+    80, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  clock = 400;
+  driver.onFrame(frame({ pumpPressureBar: 9, flowRateGPerS: 1.5, scaleWeightG: 2 })); // → Druckstufe
+  for (let t = 800; t <= 8400; t += 400) {
+    clock = t;
+    const soll = 9 + (0.1 - 9) * (t - 400) / 10000;
+    driver.onFrame(frame({ pumpPressureBar: soll, flowRateGPerS: 1.5, scaleWeightG: 2 + t / 1000 }));
+  }
+  await flush();
+  const powers = calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg as number);
+  const last = powers[powers.length - 1]!;
+  assert.ok(last < 45, `Pumpe blieb trotz fallendem Soll oben: ${powers.join(", ")}`);
+});
+
 test("start rejects a malformed step sequence without arming", async () => {
   const { driver } = makeDriver();
   clock = 0;
@@ -1326,4 +1351,154 @@ test("⚠ Nachsenden nie im oder nach dem Stopp — der letzte Pumpenbefehl blei
   const pump = d.calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg);
   assert.deepEqual(pump, [60, 0], "kein Nachsenden im Stopp");
   assert.ok(!d.events.some((e) => e.event === "pump_resend"));
+});
+
+// ---------------------------------------------------------------------------
+// Stufe ans Dashboard (2026-10-20): jeder Stufenwechsel geht an onStage
+// ---------------------------------------------------------------------------
+
+test("onStage meldet Stufe 0 beim Start und jeden Wechsel — mit Name, sonst null, und Ton", async () => {
+  const { driver } = makeDriver();
+  const seen: unknown[] = [];
+  driver.onStage = (s) => { seen.push(s); };
+  clock = 0;
+  const steps: BrewStep[] = [
+    { kind: "power", power: 0, name: " Bloom ", tone: true, exit: { seconds: 30, pressureBelowBar: 2 } },
+    { kind: "flow", targetFlowGs: 1.4, exit: {} },
+  ];
+  await driver.start({ maxBrewMs: 60_000, steps }, 36, ARM, frame({ pumpPressureBar: 6 }));
+  assert.deepEqual(seen, [{ index: 0, kind: "power", name: "Bloom", tone: true }]);
+
+  // wie oben: erst ueber der Schwelle (schaerft den Ausstieg), dann darunter
+  for (const [t, p] of [[500, 4], [1000, 1.8]] as const) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: p, scaleWeightG: 0, flowRateGPerS: 0 }));
+    await flush();
+  }
+  assert.deepEqual(seen[1], { index: 1, kind: "flow", name: null, tone: false });
+  assert.equal(seen.length, 2);
+});
+
+test("Ausstieg „Fluss über“: die Stufe endet, sobald der Tassenfluss den Wert erreicht", async () => {
+  const { driver, state } = makeDriver();
+  clock = 0;
+  const steps: BrewStep[] = [
+    { kind: "pressure", targetPressureBar: 3, exit: { seconds: 30, flowAboveGs: 1.5 } },
+    { kind: "flow", targetFlowGs: 1.5, exit: {} },
+  ];
+  await driver.start({ maxBrewMs: 60_000, steps }, 36, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0 }));
+  for (const [t, f] of [[500, 0.2], [1000, 0.9], [1500, 1.4]] as const) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: 3, scaleWeightG: 2, flowRateGPerS: f }));
+    await flush();
+  }
+  assert.equal(state.stages.length, 1, "unter 1,5 g/s darf nichts wechseln");
+  clock = 2000;
+  driver.onFrame(frame({ pumpPressureBar: 3, scaleWeightG: 3, flowRateGPerS: 1.6 }));
+  await flush();
+  assert.equal(state.stages.length, 2);
+  assert.equal(state.stages[0]!.exitReason, "flowAboveGs");
+});
+
+// ---------------------------------------------------------------------------
+// Druck übernehmen (Decent HOLD-P, 2026-10-20)
+// ---------------------------------------------------------------------------
+
+test("Druck übernehmen: Ziel ist der Druck beim Eintritt, verbucht als Ziel der Stufe", async () => {
+  const { driver, state } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { steps: [
+      { kind: "flow", targetFlowGs: 2, exit: { seconds: 2 } },
+      { kind: "pressure", targetPressureBar: 9, adoptPressure: true, exit: { weightG: 36 } },
+    ] },
+    36, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  for (const [t, p] of [[500, 3.1], [1000, 4.8], [1500, 5.9], [2100, 6.34]] as const) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: p, flowRateGPerS: 2, scaleWeightG: t / 500 }));
+    await flush();
+  }
+  const recorded = state.stages as unknown as { stepKind: string; targetPressureBar: number | null }[];
+  assert.equal(recorded.length, 2);
+  assert.deepEqual([recorded[1]!.stepKind, recorded[1]!.targetPressureBar], ["pressure", 6.3]);
+});
+
+test("Druck übernehmen ohne Druck beim Eintritt (unter 0,5 bar): es gilt der erwartete Wert", async () => {
+  const { driver, state } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { steps: [
+      { kind: "power", power: 0, exit: { seconds: 1 } },
+      { kind: "pressure", targetPressureBar: 7.5, adoptPressure: true, exit: { weightG: 36 } },
+    ] },
+    36, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  for (const t of [500, 1100]) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: 0.2, flowRateGPerS: 0, scaleWeightG: 0 }));
+    await flush();
+  }
+  const recorded = state.stages as unknown as { targetPressureBar: number | null }[];
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[1]!.targetPressureBar, 7.5);
+});
+
+// ---------------------------------------------------------------------------
+// Ohne Ziel (2026-10-20): die letzte Stufe beendet den Bezug (Decent-Profil ohne Zielgewicht)
+// ---------------------------------------------------------------------------
+
+test("ohne Ziel: keine Waagen-Abschaltung, die letzte Stufe endet nach ihrer Zeit → normaler Abschluss", async () => {
+  const { driver, calls, state } = makeDriver();
+  clock = 0;
+  await driver.start(
+    { maxBrewMs: 120_000, steps: [
+      { kind: "preinfusion", gentleness: "normal", exit: { seconds: 8 } },
+      { kind: "power", power: 0, exit: { seconds: 5 } },
+      { kind: "flow", targetFlowGs: 2.5, exit: { seconds: 6 } },
+    ] },
+    null, ARM, frame({ pumpPressureBar: 0, flowRateGPerS: 0, scaleWeightG: 0 }),
+  );
+  // Gewicht steigt weit ueber jedes uebliche Ziel — ohne Ziel darf das nichts stoppen.
+  let t = 0;
+  for (; t <= 18_500; t += 500) {
+    clock = t;
+    driver.onFrame(frame({ pumpPressureBar: 0.1, flowRateGPerS: 2.5, scaleWeightG: t / 100 }));
+    await flush();
+  }
+  assert.equal(state.stopMode, null, "vor dem Ende der letzten Stufe kein Stopp");
+  assert.equal(state.stages.length, 3);
+  const writesBefore = calls.filter((c) => c.method === "paddlePumppower" && c.arg !== 0).length;
+  clock = 19_500; // letzte Stufe seit 13 s → nach 6 s vorbei
+  driver.onFrame(frame({ pumpPressureBar: 0.1, flowRateGPerS: 2.5, scaleWeightG: 195 }));
+  await flush();
+  assert.equal(state.stopMode, "flowhold");
+  assert.equal(state.stages[2]!.exitReason, "seconds");
+  assert.ok(calls.some((c) => c.method === "paddleStop"), "normaler Abschluss fehlt");
+  const writesAfter = calls.filter((c) => c.method === "paddlePumppower" && c.arg !== 0).length;
+  assert.equal(writesAfter, writesBefore, "nach dem Stopp keine Pumpenleistung mehr");
+});
+
+test("ohne Ziel startet nichts, dessen letzte Stufe keinen Ausstieg hat", async () => {
+  const { driver, calls } = makeDriver();
+  clock = 0;
+  await assert.rejects(
+    driver.start({ steps: [{ kind: "flow", targetFlowGs: 2, exit: { seconds: 5 } }, { kind: "flow", targetFlowGs: 1.5, exit: {} }] }, null, ARM, frame()),
+    /letzte Stufe einen Ausstieg/,
+  );
+  await assert.rejects(driver.start(undefined, null, ARM, frame()), /Ohne Ziel/);
+  assert.equal(driver.isActive(), false);
+  assert.equal(calls.filter((c) => c.method === "paddlePumppower").length, 0, "keine Pumpe ohne gültigen Start");
+});
+
+test("mit Ziel zählen die Ausstiege der letzten Stufe weiter nicht (die Waage stoppt)", async () => {
+  const { driver, state } = makeDriver();
+  clock = 0;
+  await driver.start({ steps: [{ kind: "flow", targetFlowGs: 2, exit: { seconds: 2 } }] }, 200, ARM, frame());
+  for (let t = 500; t <= 6000; t += 500) {
+    clock = t;
+    driver.onFrame(frame({ flowRateGPerS: 2, scaleWeightG: t / 500 }));
+    await flush();
+  }
+  assert.equal(state.stopMode, null);
 });

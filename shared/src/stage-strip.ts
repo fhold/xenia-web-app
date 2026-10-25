@@ -27,7 +27,7 @@ export type StripWhat =
 /** Was eine Stufe beendet hat. `stop` = hier endete der ganze Bezug,
  *  `arrived` = der Kaffee kam in der Tasse an (Preinfusion). */
 export type StripExit =
-  | { kind: "seconds" | "weight" | "pressureAbove" | "pressureBelow" | "flowBelow"; value: number }
+  | { kind: "seconds" | "weight" | "pressureAbove" | "pressureBelow" | "flowBelow" | "flowAbove"; value: number }
   | { kind: "arrived" }
   | { kind: "waitWeight" | "waitTemp" | "waitPressure"; value: number }
   | { kind: "stop"; mode: StopMode | null; weightG: number | null };
@@ -65,6 +65,7 @@ const EXIT_KIND = {
   pressureBar: "pressureAbove",
   pressureBelowBar: "pressureBelow",
   flowGs: "flowBelow",
+  flowAboveGs: "flowAbove",
 } as const;
 
 function whatOfStep(step: BrewStep): StripWhat {

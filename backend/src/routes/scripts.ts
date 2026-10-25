@@ -45,14 +45,14 @@ import type {
  *  only letters, digits, "-", "_", "#" and spaces. */
 const NAME_RE = /^(?! )[A-Za-z0-9\-_# ]*(?<! )$/;
 
-type WriteBody = { title?: unknown; content?: unknown };
+export type WriteBody = { title?: unknown; content?: unknown };
 
 /**
  * Shared gate for both write routes: title against the machine's name rule,
  * content through parse → validate → serialize. Returns the canonical token
  * string, so what we send is exactly what the round-trip test covers.
  */
-function checkWrite(
+export function checkWrite(
   body: WriteBody,
 ): { ok: true; title: string; instruction: string } | { ok: false; error: string } {
   const title = typeof body.title === "string" ? body.title : "";
@@ -73,6 +73,11 @@ function checkWrite(
     return { ok: false, error: validation.errors.map((e) => e.message).join("; ") };
   }
   return { ok: true, title, instruction: serializeScript(parsed) };
+}
+
+/** Ein Bezug oder eine Wartung laeuft — dann schreibt niemand Skripte an die Maschine. */
+export function scriptWriteBlocked(recorder: ShotRecorder, frame: LiveFrame | null): boolean {
+  return (recorder.activeShotId !== null && frame?.machineStatus === 3) || recorder.isMaintenanceActive;
 }
 
 export function registerScriptRoutes(
@@ -328,9 +333,7 @@ export function registerScriptRoutes(
   // brew is running: the flash write is not a brew command, but rewriting the
   // script under a running execute has no defined behaviour on the ESP.
   // ---------------------------------------------------------------------------
-  const brewActive = (): boolean =>
-    (recorder.activeShotId !== null && getLastFrame()?.machineStatus === 3) ||
-    recorder.isMaintenanceActive;
+  const brewActive = (): boolean => scriptWriteBlocked(recorder, getLastFrame());
 
   // POST /api/scripts — create a NEW script; the machine picks the slot, the
   // sync helper discovers it by diffing scripts/list. Returns the synced script.

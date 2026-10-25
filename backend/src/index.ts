@@ -18,6 +18,7 @@ import { registerMachineRoutes } from "./routes/machine.js";
 import { registerMachineAddressRoute } from "./routes/machine-address.js";
 import { registerScriptRoutes } from "./routes/scripts.js";
 import { registerProfileRoutes } from "./routes/profiles.js";
+import { registerProfileImportRoutes } from "./routes/profile-import.js";
 import { registerShotRoutes } from "./routes/shots.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerBeanRoutes } from "./routes/beans.js";
@@ -153,6 +154,7 @@ async function start(): Promise<void> {
   // PI flow loop. Shares the poller's frames with the recorder (single measuring
   // path); the driver owns its own stop.
   const flowHoldDriver = new FlowHoldDriver(client, recorder, settingsRepo, rootLogger);
+  flowHoldDriver.onStage = (stage) => hub.broadcastDriveStage(stage);
   // Poller after recorder so it can extend brew-rate polling during Post-Brew-Tracking
   // (§4.12) AND while a flow-hold drive is active (MA_STATUS=5, needs the fast loop).
   const poller = new XeniaPoller(
@@ -194,6 +196,7 @@ async function start(): Promise<void> {
     gateFrame,
   );
   registerProfileRoutes(app, profileRepo, scriptRepo, () => hub.broadcastProfilesChanged());
+  registerProfileImportRoutes(app, client, scriptRepo, profileRepo, recorder, () => hub.getLastFrame(), () => hub.broadcastProfilesChanged());
   registerShotRoutes(app, client, shotRepo, recorder, beanRepo, profileRepo, scriptRepo, bestBrewRepo, (shot) => hub.broadcastShotUpdated(shot), flowHoldDriver, settingsRepo);
   registerSettingsRoutes(app, settingsRepo);
   registerBeanRoutes(app, beanRepo, coffeeRepo, settingsRepo);

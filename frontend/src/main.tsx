@@ -1,15 +1,21 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App.js";
+import { startTheme, syncThemeFromServer } from "./themeStartup.js";
+
+// Farbschema zuerst: mehrere Module lesen ihre Farben beim Laden.
+startTheme();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element #root not found");
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+void import("./App.js").then(({ default: App }) => {
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+  void syncThemeFromServer();
+});
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
