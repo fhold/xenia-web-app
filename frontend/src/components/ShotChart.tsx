@@ -101,6 +101,8 @@ interface ShotChartProps {
   topInset?: number;
   /** Hinter dem Titel, wird nie gekuerzt (die laufende Stufe) — gekuerzt wird der Titel. */
   titleTail?: string | null;
+  /** Hinter der Stufe, was sie tun soll (Dashboard, App-Bezug) — wird erst nach dem Titel gekuerzt. */
+  titleGoal?: string | null;
   /** Show the "Bezug beendet" badge in ended mode (auto-hides after 3s).
    *  Off for static views like the history detail modal. Default true. */
   endedBadge?: boolean;
@@ -140,8 +142,10 @@ type ChartRow = {
 };
 
 export interface ShotChartStageOverlay {
-  /** Green Soll staircase for the flow stages that ran (seconds, v in g/s). */
+  /** Green Soll line for the flow stages that ran (seconds, v in g/s). */
   flowSoll: { t: number; v: number }[];
+  /** Green Soll line for the pressure stages that ran (seconds, v in bar). */
+  barSoll: { t: number; v: number }[];
   /** Faint continuation staircase of planned flow stages that never ran. */
   ghostSoll: { t: number; v: number }[];
   /** Vertical markers at real stage entries (seconds + short label). */
@@ -327,6 +331,7 @@ function ShotChartInner({
   endedBadge = true,
   title = null,
   titleTail = null,
+  titleGoal = null,
   topInset = 0,
   overlay = null,
   stageOverlay = null,
@@ -411,6 +416,7 @@ function ShotChartInner({
     }
     if (stageOverlay) {
       for (const p of stageOverlay.flowSoll) rows.push({ t: p.t, stageFlowSoll: p.v });
+      for (const p of stageOverlay.barSoll) rows.push({ t: p.t, stageBarSoll: p.v });
       for (const p of stageOverlay.ghostSoll) rows.push({ t: p.t, stageGhostSoll: p.v });
     }
     rows.sort((a, b) => (a.t as number) - (b.t as number));
@@ -548,8 +554,9 @@ function ShotChartInner({
       >
         {title && (
           <div style={{ flex: 1, minWidth: 0, display: "flex", fontSize: 12, color: C.txtS, whiteSpace: "nowrap" }}>
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
-            {titleTail && <span style={{ flexShrink: 0, color: C.txt }}>&nbsp;· {titleTail}</span>}
+            <span className={titleGoal ? "chart-title-name" : undefined} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+            {titleTail && <span style={{ flexShrink: 0, color: C.txt }}><span className={titleGoal ? "chart-title-name" : undefined}>&nbsp;· </span>{titleTail}</span>}
+            {titleGoal && <span style={{ minWidth: 0, flexShrink: 0.05, overflow: "hidden", textOverflow: "ellipsis", color: C.txt }}>&nbsp;· {titleGoal}</span>}
           </div>
         )}
         {/* LIVE badge — only during brewing */}
@@ -847,8 +854,8 @@ function ShotChartInner({
             </>
           )}
 
-          {/* Flow-Hold stages: green Soll flow staircase (of the stages that ran),
-              faint ghost refs for planned-but-never-run flows, vertical markers. */}
+          {/* Flow-Hold stages: green Soll line of the pressure and flow stages that
+              ran, faint ghost refs for planned-but-never-run flows, vertical markers. */}
           {stageOverlay && (
             <>
               {stageOverlay.markers.map((m, i) => (
@@ -874,6 +881,7 @@ function ShotChartInner({
               )}
               <Line yAxisId="main" dataKey="stageGhostSoll" name="stageGhostSoll" stroke={SOLL_GREEN} strokeOpacity={0.32} strokeWidth={1.5} strokeDasharray="2 5" dot={false} isAnimationActive={false} connectNulls />
               <Line yAxisId="main" dataKey="stageFlowSoll" name="stageFlowSoll" stroke={SOLL_GREEN} strokeOpacity={0.85} strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} connectNulls />
+              <Line yAxisId="main" dataKey="stageBarSoll" name="stageBarSoll" stroke={SOLL_GREEN} strokeOpacity={0.85} strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} connectNulls />
             </>
           )}
         </ComposedChart>
@@ -908,6 +916,7 @@ export const ShotChart = memo(ShotChartInner, (prev, next) =>
   prev.endedBadge             === next.endedBadge &&
   prev.title                  === next.title &&
   prev.titleTail              === next.titleTail &&
+  prev.titleGoal              === next.titleGoal &&
   prev.topInset               === next.topInset &&
   prev.overlay                === next.overlay &&
   prev.stageOverlay           === next.stageOverlay &&

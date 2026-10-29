@@ -27,7 +27,6 @@ import { registerGrinderRoutes } from "./routes/grinders.js";
 import { registerNetworkRoutes } from "./routes/network.js";
 import { registerBasketRoutes } from "./routes/baskets.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
-import { registerBestBrewRoutes } from "./routes/best-brew.js";
 import { SqliteScriptRepo } from "./db/script-repo.js";
 import { SqliteMaintenanceLogRepo } from "./db/maintenance-repo.js";
 import { SqliteProfileRepo } from "./db/profile-repo.js";
@@ -37,10 +36,10 @@ import { SqliteBeanRepo } from "./db/bean-repo.js";
 import { SqliteCoffeeRepo } from "./db/coffee-repo.js";
 import { SqliteGrinderRepo } from "./db/grinder-repo.js";
 import { SqliteBasketRepo } from "./db/basket-repo.js";
-import { SqliteBestBrewRepo } from "./db/best-brew-repo.js";
 import { ShotRecorder } from "./shots/recorder.js";
 import { FlowHoldDriver } from "./xenia/flow-hold-driver.js";
 import { registerDriveRoutes } from "./routes/drive.js";
+import { registerRequestLang } from "./lib/request-lang.js";
 import { syncAllScripts } from "./xenia/script-sync.js";
 import { registerStatic } from "./static.js";
 import { rootLogger, makeXeniaLogger } from "./log.js";
@@ -80,6 +79,7 @@ async function start(): Promise<void> {
   });
 
   app.setErrorHandler(apiErrorHandler);
+  registerRequestLang(app);
 
   // A refused request has to name itself. Fastify's own logger goes to stdout,
   // which needs journald access to read, and a route cannot log its own 4xx when
@@ -126,7 +126,6 @@ async function start(): Promise<void> {
   const coffeeRepo = new SqliteCoffeeRepo();
   const grinderRepo = new SqliteGrinderRepo();
   const basketRepo = new SqliteBasketRepo();
-  const bestBrewRepo = new SqliteBestBrewRepo();
   const maintenanceLog = new SqliteMaintenanceLogRepo();
   const recorder = new ShotRecorder(shotRepo, settingsRepo, client, rootLogger);
   // Rückspül-Reminder: ÄW-B keeps maintenance runs out of the shot table, so log
@@ -197,15 +196,14 @@ async function start(): Promise<void> {
   );
   registerProfileRoutes(app, profileRepo, scriptRepo, () => hub.broadcastProfilesChanged());
   registerProfileImportRoutes(app, client, scriptRepo, profileRepo, recorder, () => hub.getLastFrame(), () => hub.broadcastProfilesChanged());
-  registerShotRoutes(app, client, shotRepo, recorder, beanRepo, profileRepo, scriptRepo, bestBrewRepo, (shot) => hub.broadcastShotUpdated(shot), flowHoldDriver, settingsRepo);
+  registerShotRoutes(app, client, shotRepo, recorder, beanRepo, profileRepo, scriptRepo, (shot) => hub.broadcastShotUpdated(shot), flowHoldDriver, settingsRepo);
   registerSettingsRoutes(app, settingsRepo);
   registerBeanRoutes(app, beanRepo, coffeeRepo, settingsRepo);
-  registerCoffeeRoutes(app, coffeeRepo, beanRepo, bestBrewRepo);
+  registerCoffeeRoutes(app, coffeeRepo, beanRepo);
   registerGrinderRoutes(app, grinderRepo);
   registerBasketRoutes(app, basketRepo);
   registerNetworkRoutes(app, shotRepo);
   registerMaintenanceRoutes(app, settingsRepo, maintenanceLog);
-  registerBestBrewRoutes(app, bestBrewRepo);
   registerDriveRoutes(
     app,
     flowHoldDriver,
@@ -238,6 +236,7 @@ async function start(): Promise<void> {
 
   poller.on("connected", () => {
     machineLog.info({ event: "connected" }, "Machine connected");
+    recorder.setMachineOnline(true);
     // Fresh setpoints (incl. water-tank level) right when the machine comes
     // online — power-on, reconnect, or backend boot — so the water-low banner
     // is correct immediately instead of waiting up to 60s for the next poll.
@@ -246,6 +245,8 @@ async function start(): Promise<void> {
 
   poller.on("disconnected", () => {
     machineLog.warn({ event: "disconnected" }, "Machine disconnected — retrying with backoff");
+    // Issue #1: bleibt sie im Skript-Bezug weg, beendet der Recorder die Aufzeichnung.
+    recorder.setMachineOnline(false);
   });
 
   poller.on("error", (err) => {

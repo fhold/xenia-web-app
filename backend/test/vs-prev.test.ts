@@ -64,7 +64,7 @@ const noBean = shot(null);                     // ohne Sorte → kein Vergleich
 const settings = new SqliteSettingsRepo();
 const shots = new SqliteShotRepo();
 const app = Fastify({ logger: false });
-registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), new SqliteProfileRepo(), {} as never, {} as never, () => {}, {} as never, settings);
+registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), new SqliteProfileRepo(), {} as never, () => {}, {} as never, settings);
 const compare = async (shotId: number) =>
   (await app.inject({ method: "GET", url: `/api/shots/${shotId}/compare` })).json() as { enabled: boolean; previous: { id: number; profileName: string; grindSetting: number } | null };
 const put = (shotId: number, payload: object) => app.inject({ method: "PUT", url: `/api/shots/${shotId}`, payload });

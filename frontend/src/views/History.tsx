@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SlidersHorizontal, ChevronLeft, X, ArrowLeftRight, Star } from "lucide-react";
+import { SlidersHorizontal, ChevronLeft, X, ArrowLeftRight } from "lucide-react";
 import { useShots, DEFAULT_SHOT_FILTERS } from "../hooks/useShots.js";
 import { makeUniqueRoastingLabels } from "../lib/roastingFilterLabel.js";
 import { formatDay } from "../lib/dates.js";
@@ -189,7 +189,7 @@ interface HistoryProps {
   /** Schnitt 4: Sprung aus dem Netz Profil ↔ Bohne mit diesen Filtern — und
    *  bei der Rueckkehr die zuletzt gesetzten. */
   initialFilters?: Partial<ShotFilters> | null;
-  /** BB-a: open this shot's detail on arrival (Best-Brew reference tap from Beans). */
+  /** Beim Ankommen diesen Bezug wieder oeffnen (Rueckweg, s. onLocationState). */
   initialShotId?: number | null;
   /** Rueckweg: Filter und offener Bezug, damit Zurueck sie wieder herstellt. */
   onLocationState?: (st: { filters: ShotFilters; shotId: number | null }) => void;
@@ -204,7 +204,7 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
   const { t, lang } = useTranslation();
   const {
     shots, total, hasMore, loading, loadingMore, error,
-    filters, setFilters, resetFilters, loadMore, update, remove, toggleBestBrew,
+    filters, setFilters, resetFilters, loadMore, update, remove,
   } = useShots();
 
   // F-B7: apply an incoming roasting filter from the Beans view, then clear it
@@ -262,8 +262,8 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
   const [editShot, setEditShot] = useState<ShotListItem | null>(null);
 
   // Bezuege vergleichen: A gewaehlt → Leiste unten; der naechste Tipp auf eine
-  // Zeile oeffnet den Vergleich statt des Details. Nach dem Schliessen bleibt A
-  // gewaehlt, damit man gleich gegen einen anderen Bezug vergleichen kann.
+  // Zeile oeffnet den Vergleich statt des Details. Schliessen (X) beendet den
+  // Vergleich ganz (Flavio 28.10.: sonst kommt man nicht wieder heraus).
   const [compareFrom, setCompareFrom] = useState<ShotListItem | null>(null);
   const [compareTo, setCompareTo] = useState<ShotListItem | null>(null);
   const [suggestions, setSuggestions] = useState<CompareSuggestions | null>(null);
@@ -282,8 +282,8 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
     else if (s.id !== compareFrom.id) setCompareTo(s);
   };
 
-  // BB-a deep-link: reset to defaults on arrival, then page until the target
-  // shot is loaded and open its detail (it may sit past the first page).
+  // Offener Bezug beim Ankommen (Rueckweg): page until the target shot is
+  // loaded and open its detail (it may sit past the first page).
   const [pendingShotId, setPendingShotId] = useState<number | null>(null);
   useEffect(() => {
     if (initialShotId !== null) {
@@ -676,7 +676,6 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
               highlight={compareFrom?.id === shot.id}
               onRepeat={onRepeat}
               repeatBlocked={repeatBlocked}
-              onToggleBest={(s, makeBest) => { void toggleBestBrew(s.id, makeBest); }}
               onDelete={(s) => { void handleDelete(s); }}
             />
           ))}
@@ -698,7 +697,6 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
           onUpdate={(patch) => update(detailShot.id, patch)}
           onRepeat={(s) => { setDetailShot(null); onRepeat(s); }}
           repeatBlocked={repeatBlocked}
-          onToggleBest={(s, makeBest) => { void toggleBestBrew(s.id, makeBest); }}
           onOpenProfile={onOpenProfile ? (id, variantId) => { setDetailShot(null); onOpenProfile(id, variantId); } : undefined}
           onCompare={(s) => { setDetailShot(null); setCompareFrom(s); }}
         />
@@ -728,11 +726,6 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
               <span style={{ flex: 1, minWidth: 160, fontSize: 13, color: C.txt }}>
                 {t("history.compare.banner", { id: compareFrom.id, profile: compareFrom.profileName })}
               </span>
-              {suggestions?.reference && (
-                <button onClick={() => setCompareTo(suggestions.reference)} style={suggestBtn} title={t("history.compare.suggestReferenceTip")}>
-                  <Star size={12} fill={C.acc} color={C.acc} />#{suggestions.reference.id}
-                </button>
-              )}
               {suggestions?.previous && (
                 <button onClick={() => setCompareTo(suggestions.previous)} style={suggestBtn} title={t("history.compare.suggestPreviousTip")}>
                   {t("history.compare.suggestPrevious", { id: suggestions.previous.id })}
@@ -756,7 +749,7 @@ export function History({ mobile, isBrewing, canStartBrew = !isBrewing, onRepeat
           mobile={mobile}
           variantName={variantName}
           onOpenShot={(s) => { setCompareTo(null); setDetailShot(s); }}
-          onClose={() => setCompareTo(null)}
+          onClose={() => { setCompareTo(null); setCompareFrom(null); }}
         />
       )}
 

@@ -13,7 +13,7 @@ labels: bug
 **Setup**
 - Xenia firmware (e.g. 4.255 / ESP 3.95):
 - Scale (e.g. Bookoo Themis Mini):
-- App version (commit or date of your checkout):
+- App version (`git describe --tags` in the app folder, e.g. v0.2.0):
 - Browser / device:
 
 **Shot or script** (if relevant): profile or script used, and the shot number from the history.

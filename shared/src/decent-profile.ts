@@ -11,9 +11,10 @@
  * (seconds = Hoechstdauer, volume = Hoechstmenge, exit_if 0 = keine Bedingung).
  */
 
-import type { BrewProfile, BrewStep, PressureStep, PreinfusionStep, ProfileFit, StepExit } from "./types.js";
+import type { BrewProfile, BrewStep, PressureStep, PreinfusionGentleness, PreinfusionStep, ProfileFit, StepExit } from "./types.js";
 import type { ProfileFileProfile } from "./profile-file.js";
 import { L } from "./shared-lang.js";
+import { PREINFUSION_FILL_MLS, PREINFUSION_SATURATE_FROM_BAR, PREINFUSION_SATURATE_MLS } from "./pump-curve.js";
 
 /** Eine Zeile der Gegenueberstellung im Import-Dialog. */
 export interface TranslationRow {
@@ -297,6 +298,9 @@ const MIN_FLOW_GS = 0.5;
 const DECLINE_MIN_SECONDS = 5;
 /** Langsamer fuellt Decent „langsam“ — unsere Preinfusion fuellt mit 3,5 ml/s. */
 const SLOW_FILL_MLS = 3;
+/** Schneller fuellt Decent „schnell“: naeher an der vollen Pumpe als an unseren 3,5 ml/s.
+ *  Die meisten Profile fuellen mit 6–8 ml/s, die uebrigen mit hoechstens 4,5. */
+const FAST_FILL_MLS = (PREINFUSION_FILL_MLS + PUMP_CEILING_GS) / 2;
 /** Ende einer Druckrampe „gleitend auf 0“ — der Treiber braucht ein positives Ziel. */
 const DECLINE_END_BAR = 0.1;
 
@@ -396,9 +400,12 @@ function describeXenia(st: BrewStep, fullRamp: boolean, endsByWeight: number | n
   const ramp = st.kind !== "preinfusion" && st.rampMs ? st.rampMs : 0;
   if (st.kind === "preinfusion") {
     parts.push("Preinfusion");
-    if (st.fill === "fast") parts.push(L("schnell füllen", "fill fast"));
-    if (st.gentleness === "gentle") parts.push(L("sanft tränken", "soak gently"));
-    if (st.gentleness === "brisk") parts.push(L("zügig tränken", "soak briskly"));
+    const fill = st.fill === "fast" ? L(`volle Pumpe ~${fmt(PUMP_CEILING_GS)} ml/s`, `full pump ~${fmt(PUMP_CEILING_GS)} ml/s`) : `${fmt(PREINFUSION_FILL_MLS)} ml/s`;
+    if (st.gentleness === "none") parts.push(fill);
+    else {
+      const soak = fmt(PREINFUSION_SATURATE_MLS[st.gentleness ?? "normal"]);
+      parts.push(L(`${fill}, ab ${fmt(PREINFUSION_SATURATE_FROM_BAR)} bar ${soak} ml/s`, `${fill}, from ${fmt(PREINFUSION_SATURATE_FROM_BAR)} bar ${soak} ml/s`));
+    }
   }
   else if (st.kind === "power") parts.push(st.power === 0 ? L("Pause (Pumpe aus)", "Pause (pump off)") : L(`Leistung ${fmt(st.power)} %`, `Power ${fmt(st.power)} %`));
   else if (st.kind === "flow") {
@@ -543,13 +550,11 @@ export function translateDecent(text: string): DecentResult {
     const byPump = fill.some(pressureFill);
     const maxFill = Math.max(0, ...fill.filter((s) => s.pump === "flow").map((s) => s.flow));
     const slow = !byPump && maxFill < SLOW_FILL_MLS;
-    const ceiling = !byPump && maxFill > PUMP_CEILING_GS
-      ? L(` ${fmt(maxFill)} ml/s schafft die Pumpe ohnehin nicht (~${fmt(PUMP_CEILING_GS)} g/s).`,
-        ` The pump cannot deliver ${fmt(maxFill)} ml/s anyway (~${fmt(PUMP_CEILING_GS)} g/s).`)
-      : "";
+    const fast = !byPump && maxFill > FAST_FILL_MLS;
     let exit: StepExit;
     let why: string;
     let decent: string;
+    let limit = "";
     if (byPump) {
       const stop = fill[nFill - 1]!.exit!.value;
       const cap = Math.max(secs, PREINFUSION_MIN_SECONDS);
@@ -557,9 +562,10 @@ export function translateDecent(text: string): DecentResult {
       exit = { pressureBar: stop, seconds: cap, ...(weights.length ? { weightG: Math.min(...weights) } : {}) };
       // Vorlauf-Schritte (gleiches Ziel, ohne Ausstieg) nicht einzeln zeigen.
       decent = fill.filter((s) => !(s.pump === "pressure" && !s.exit)).map(describeDecent).join(" → ");
-      why = L(`Das Ziel ${fmt(p)} bar liegt über dem Ausstieg ${fmt(stop)} bar: die Decent füllt hier mit voller Pumpe. Als Druckstufe drehte die Regelung bei uns auf dem leeren Puck hoch und schoss über (#158/#159) — daher Preinfusion: schnell füllen bis zum ersten Gegendruck, dann zügig bis ${fmt(stop)} bar.`,
-        `The target ${fmt(p)} bar is above the exit ${fmt(stop)} bar: the Decent fills at full pump here. As a pressure stage our control wound up on the empty puck and overshot (#158/#159) — hence preinfusion: fill fast until first back pressure, then briskly until ${fmt(stop)} bar.`)
-        + (cap > secs ? L(` Decents ${fmt(secs)} s wären hier zu knapp, sie bleiben nur Grenze.`, ` Decent's ${fmt(secs)} s would be too short here; they only remain a limit.`) : "");
+      why = L(`Das Ziel ${fmt(p)} bar liegt über dem Ausstieg ${fmt(stop)} bar: die Decent füllt hier mit voller Pumpe. Als Druckstufe drehte die Regelung bei uns auf dem leeren Puck hoch und schoss über (#158/#159) — daher als Preinfusion.`,
+        `The target ${fmt(p)} bar is above the exit ${fmt(stop)} bar: the Decent fills at full pump here. As a pressure stage our control wound up on the empty puck and overshot (#158/#159) — hence as a preinfusion.`);
+      if (cap > secs) limit = L(`Höchstens ${fmt(cap)} statt ${fmt(secs)} s: Das Füllen dauert hier länger, die Zeit ist nur ein Schutz.`,
+        `At most ${fmt(cap)} instead of ${fmt(secs)} s: filling takes longer here; the time is only a safeguard.`);
     } else if (byPressure) {
       const stop = fill[nFill - 1]!.exit!.value;
       const cap = Math.max(secs, PREINFUSION_MIN_SECONDS);
@@ -567,20 +573,42 @@ export function translateDecent(text: string): DecentResult {
       decent = L(`Fluss ${fmt(maxFill)} ml/s bis ${fmt(stop)} bar · höchstens ${fmt(secs)} s`, `Flow ${fmt(maxFill)} ml/s until ${fmt(stop)} bar · at most ${fmt(secs)} s`);
       why = L("Beim Füllen kommt in der Tasse noch nichts an — die Xenia füllt über den errechneten Zulauf und übergibt, sobald Kaffee kommt.",
         "While filling, nothing reaches the cup yet — the Xenia fills via the calculated inflow and hands over as soon as coffee arrives.")
-        + (cap > secs ? L(` Decents ${fmt(secs)} s wären hier zu knapp (6–9 s bis 3,8 bar), sie bleiben nur Grenze.`,
-          ` Decent's ${fmt(secs)} s would be too short here (6–9 s to 3.8 bar); they only remain a limit.`) : "") + ceiling;
+        // Die Raten stehen in der Zeile (Decent | Xenia), hier nur, warum sie abweichen.
+        + (fast ? "\n" + L(`Mehr als ~${fmt(PUMP_CEILING_GS)} ml/s fördert die Pumpe nicht.`, `The pump delivers no more than ~${fmt(PUMP_CEILING_GS)} ml/s.`)
+          : slow || r1(maxFill) === PREINFUSION_FILL_MLS ? ""
+          : "\n" + L(`Die Preinfusion füllt mit ${fmt(PREINFUSION_FILL_MLS)} ml/s oder voller Pumpe — ${fmt(PREINFUSION_FILL_MLS)} liegt näher an Decents ${fmt(maxFill)} ml/s.`,
+            `Preinfusion fills at ${fmt(PREINFUSION_FILL_MLS)} ml/s or full pump — ${fmt(PREINFUSION_FILL_MLS)} is closer to Decent's ${fmt(maxFill)} ml/s.`));
+      if (cap > secs) limit = L(`Höchstens ${fmt(cap)} statt ${fmt(secs)} s: Das Füllen dauert hier länger (bis 3,8 bar 6–9 s), die Zeit ist nur ein Schutz.`,
+        `At most ${fmt(cap)} instead of ${fmt(secs)} s: filling takes longer here (6–9 s to 3.8 bar); the time is only a safeguard.`);
     } else {
       exit = { seconds: secs, ...(weights.length ? { weightG: Math.min(...weights) } : {}) };
       decent = L(`Fluss ${fmt(maxFill)} ml/s · ${fmt(secs)} s`, `Flow ${fmt(maxFill)} ml/s · ${fmt(secs)} s`);
-      why = L("Fluss in die Tasse lässt sich beim Benetzen nicht regeln — die Xenia füllt über den errechneten Zulauf, in derselben Zeit mit weniger Wasser (~3,5 ml/s).",
-        "Flow into the cup cannot be controlled while wetting — the Xenia fills via the calculated inflow, in the same time with less water (~3.5 ml/s).") + ceiling;
+      why = fast
+        ? L(`Fluss in die Tasse lässt sich beim Benetzen nicht regeln — die Xenia füllt über den errechneten Zulauf in derselben Zeit, mit voller Pumpe (~${fmt(PUMP_CEILING_GS)} ml/s statt ${fmt(maxFill)}).`,
+          `Flow into the cup cannot be controlled while wetting — the Xenia fills via the calculated inflow in the same time, at full pump (~${fmt(PUMP_CEILING_GS)} ml/s instead of ${fmt(maxFill)}).`)
+        : L("Fluss in die Tasse lässt sich beim Benetzen nicht regeln — die Xenia füllt über den errechneten Zulauf, in derselben Zeit mit weniger Wasser (~3,5 ml/s).",
+          "Flow into the cup cannot be controlled while wetting — the Xenia fills via the calculated inflow, in the same time with less water (~3.5 ml/s).");
     }
+    // Traenken: ab 1 bar bremst die Preinfusion („normal“). Auf der Decent steigt der Druck beim
+    // Fuellen nur um 0,4–1 bar/s, in der Tasse kommt noch nichts an — der Puck nimmt das Wasser
+    // auf (Visualizer, 37 Bezuege mit Fluss-Fuellung, 28.10.). Bei uns tropft es dann schon, und
+    // ungebremst bis zum Ausstieg sprang der Druck (80's #308/#309: 3–5 bar/s, Spitze +0,6/+0,7;
+    // gebremst #306: 0,8 bar/s wie die Decent). Langsamer als 3 ml/s traenkt sie mit der Stufe,
+    // die Decents Rate am naechsten kommt.
+    let gentleness: PreinfusionGentleness = "normal";
     if (slow) {
-      why += L(` Decent füllt langsam (${fmt(maxFill)} ml/s). Ohne Gegendruck fördert die Pumpe darunter nicht zuverlässig (unter 25 % gar nicht, ab 25 % rund 2 ml/s) — das Füllen bleibt bei 3,5 ml/s, ab 1 bar tränkt sie sanft (1,5 ml/s).`,
-        ` Decent fills slowly (${fmt(maxFill)} ml/s). Without back pressure the pump does not deliver that reliably (below 25 % not at all, from 25 % about 2 ml/s) — filling stays at 3.5 ml/s, from 1 bar it soaks gently (1.5 ml/s).`);
+      const soak = (Object.keys(PREINFUSION_SATURATE_MLS) as (keyof typeof PREINFUSION_SATURATE_MLS)[])
+        .reduce((a, b) => Math.abs(PREINFUSION_SATURATE_MLS[b] - maxFill) < Math.abs(PREINFUSION_SATURATE_MLS[a] - maxFill) ? b : a);
+      gentleness = soak;
+      why += "\n" + L(`So langsam fördert die Pumpe ohne Gegendruck nicht zuverlässig (unter 25 % gar nicht, ab 25 % rund 2 ml/s) — daher bis ${fmt(PREINFUSION_SATURATE_FROM_BAR)} bar ${fmt(PREINFUSION_FILL_MLS)} ml/s.`,
+        `The pump cannot deliver that little reliably without back pressure (below 25 % not at all, from 25 % about 2 ml/s) — hence ${fmt(PREINFUSION_FILL_MLS)} ml/s until ${fmt(PREINFUSION_SATURATE_FROM_BAR)} bar.`);
+    } else if (exit.pressureBar !== undefined && exit.pressureBar > PREINFUSION_SATURATE_FROM_BAR) {
+      why += "\n" + L(`Ab ${fmt(PREINFUSION_SATURATE_FROM_BAR)} bar gebremst: Auf der Decent steigt der Druck beim Füllen nur um 0,4–1 bar/s, weil der Puck noch Wasser aufnimmt. Bei uns tropft es dann schon — ungebremst bis ${fmt(exit.pressureBar)} bar spränge der Druck.`,
+        `Braked from ${fmt(PREINFUSION_SATURATE_FROM_BAR)} bar: on the Decent the pressure rises only 0.4–1 bar/s while filling because the puck is still absorbing water. Here coffee is already dripping by then — unbraked until ${fmt(exit.pressureBar)} bar the pressure would jump.`);
     }
+    if (limit) why += "\n" + limit;
     const st: PreinfusionStep = { kind: "preinfusion", name: label(fill[nFill - 1]!, nFill - 1),
-      gentleness: byPump ? "brisk" : slow ? "gentle" : "normal", ...(byPump ? { fill: "fast" as const } : {}), exit };
+      gentleness, ...(byPump || fast ? { fill: "fast" as const } : {}), exit };
     steps.push(st);
     rows.push({ at: at.get(fill[0]!)!, group: "step", name: fill.map(label).join(" + "), decent, xenia: describeXenia(st, false, null), status: "changed", why });
   }

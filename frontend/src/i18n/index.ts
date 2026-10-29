@@ -33,8 +33,17 @@ let currentLang: Language = (() => {
   }
 })();
 
-// Texte aus dem gemeinsamen Code (shared/) in derselben Sprache.
-setSharedLang(currentLang);
+// Texte aus dem gemeinsamen Code (shared/) in derselben Sprache — und die
+// Meldungen des Servers: er liest die Sprache aus diesem Cookie.
+function applyLanguage(lang: Language): void {
+  setSharedLang(lang);
+  try {
+    document.cookie = `xenia_lang=${lang}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch {
+    // ignore — dann antwortet der Server auf Deutsch
+  }
+}
+applyLanguage(currentLang);
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -49,7 +58,7 @@ export function getCurrentLanguage(): Language {
 
 export function setLanguage(lang: Language): void {
   currentLang = lang;
-  setSharedLang(lang);
+  applyLanguage(lang);
   try {
     localStorage.setItem(STORAGE_KEY, lang);
   } catch {

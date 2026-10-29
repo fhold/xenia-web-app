@@ -5,6 +5,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SqliteSettingsRepo } from "../db/settings-repo.js";
 import { UI_THEME_PATTERN, checkColorSchemes } from "../../../shared/src/color-scheme.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 // ---------------------------------------------------------------------------
 // Whitelist — which keys may be mutated via PUT /api/settings/:key
@@ -38,6 +39,7 @@ const ALLOWED: Record<string, SettingDef> = {
   show_pump_curve:               { type: "boolean" },
   show_stage_markers:            { type: "boolean" },
   show_ghosts:                   { type: "boolean" },
+  live_soll_curve:               { type: "boolean" },
   ghost_count:                   { type: "number",  min: 1,   max: 50   },
   brew_by_weight_active:         { type: "boolean" },
   brew_by_weight_window_ms:      { type: "number",  min: 100, max: 10000 },
@@ -87,25 +89,25 @@ type ValidationResult =
 
 function validate(key: string, rawValue: string): ValidationResult {
   const def = ALLOWED[key];
-  if (!def) return { ok: false, error: `Unknown or read-only setting: ${key}` };
+  if (!def) return { ok: false, error: L(`Unbekannte oder schreibgeschützte Einstellung: ${key}`, `Unknown or read-only setting: ${key}`) };
 
   if (def.type === "boolean") {
     if (rawValue !== "true" && rawValue !== "false") {
-      return { ok: false, error: `${key} must be "true" or "false"` };
+      return { ok: false, error: L(`${key} muss "true" oder "false" sein`, `${key} must be "true" or "false"`) };
     }
     return { ok: true, normalized: rawValue };
   }
 
   if (def.type === "enum") {
     if (!def.values!.includes(rawValue)) {
-      return { ok: false, error: `${key} must be one of: ${def.values!.join(", ")}` };
+      return { ok: false, error: L(`${key} muss einer dieser Werte sein: ${def.values!.join(", ")}`, `${key} must be one of: ${def.values!.join(", ")}`) };
     }
     return { ok: true, normalized: rawValue };
   }
 
   if (def.type === "string") {
     if (def.pattern && !def.pattern.test(rawValue)) {
-      return { ok: false, error: `${key} has an invalid format` };
+      return { ok: false, error: L(`${key} hat ein ungültiges Format`, `${key} has an invalid format`) };
     }
     const problem = def.check?.(rawValue) ?? null;
     if (problem !== null) return { ok: false, error: problem };
@@ -114,12 +116,12 @@ function validate(key: string, rawValue: string): ValidationResult {
 
   // type === "number"
   const num = def.float ? parseFloat(rawValue) : parseInt(rawValue, 10);
-  if (isNaN(num)) return { ok: false, error: `${key} must be a number` };
+  if (isNaN(num)) return { ok: false, error: L(`${key} muss eine Zahl sein`, `${key} must be a number`) };
   if (def.min !== undefined && num < def.min) {
-    return { ok: false, error: `${key} must be >= ${def.min}` };
+    return { ok: false, error: L(`${key} muss mindestens ${def.min} sein`, `${key} must be >= ${def.min}`) };
   }
   if (def.max !== undefined && num > def.max) {
-    return { ok: false, error: `${key} must be <= ${def.max}` };
+    return { ok: false, error: L(`${key} darf höchstens ${def.max} sein`, `${key} must be <= ${def.max}`) };
   }
   return { ok: true, normalized: String(num) };
 }
@@ -149,6 +151,7 @@ export function registerSettingsRoutes(
       showPumpCurve:    (settingsRepo.get("show_pump_curve")                ?? "false") === "true",
       showStageMarkers: (settingsRepo.get("show_stage_markers")             ?? "false") === "true",
       showGhosts:       (settingsRepo.get("show_ghosts")                    ?? "false") === "true",
+      liveSoll:         (settingsRepo.get("live_soll_curve")                ?? "false") === "true",
       ghostCount:       parseInt(settingsRepo.get("ghost_count")            ?? "20",  10),
     };
   });
@@ -258,7 +261,7 @@ export function registerSettingsRoutes(
         rawValue = String(value);
       } else {
         return reply.status(400).send({
-          error: "Body must include { value: string }, or { value: number } for numeric settings",
+          error: L("Der Inhalt braucht { value: string }, bei Zahlen-Einstellungen { value: number }", "Body must include { value: string }, or { value: number } for numeric settings"),
         });
       }
 

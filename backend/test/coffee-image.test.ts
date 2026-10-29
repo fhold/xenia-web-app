@@ -179,7 +179,7 @@ test("hängt ein Bezug daran, wird nichts gelöscht", () => {
   const b = addBean(id);
   addShot(b);
   assert.equal(repo.shotCount(id), 1);
-  assert.throws(() => { repo.deleteWithRoastings(id); }, /shots/);
+  assert.throws(() => { repo.deleteWithRoastings(id); }, /Bezüge/);
   // ⚠ Der Punkt des Tests: nach dem Abbruch steht ALLES noch, nicht nur die Sorte.
   assert.ok(repo.findById(id));
   const rest = getDb().prepare("SELECT COUNT(*) c FROM bean WHERE coffee_id = ?").get(id) as { c: number };
@@ -199,7 +199,7 @@ test("die strenge delete() bleibt streng — sie ist der Weg ohne Röstungen", (
   assert.equal(repo.findById(id), undefined);
   const id2 = addCoffee("Voll");
   addBean(id2);
-  assert.throws(() => { repo.delete(id2); }, /roastings/);
+  assert.throws(() => { repo.delete(id2); }, /Röstungen/);
 });
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,8 @@ export interface ChartXSettings {
   showGhosts: boolean;
   /** How many past shots the ghost cloud draws. Default 20. */
   ghostCount: number;
+  /** Sollkurve der laufenden App-Stufen im Live-Diagramm (live_soll_curve). Default false. */
+  liveSoll: boolean;
 }
 
 const DEFAULTS: ChartXSettings = {
@@ -41,6 +43,7 @@ const DEFAULTS: ChartXSettings = {
   showStageMarkers: false,
   showGhosts:      false,
   ghostCount:      20,
+  liveSoll:        false,
 };
 
 export function useChartSettings(): { settings: ChartXSettings; refetch: () => void } {

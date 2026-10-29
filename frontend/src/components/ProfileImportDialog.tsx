@@ -182,7 +182,7 @@ const head: React.CSSProperties = { fontSize: 10, color: C.mut, fontWeight: 600,
 
 function Why({ text }: { text: string }) {
   return (
-    <HoverTip content={<div style={{ fontSize: 12, maxWidth: 320 }}>{text}</div>} style={{ display: "inline-flex", color: C.mut, cursor: "help", verticalAlign: "middle" }}>
+    <HoverTip content={<div style={{ fontSize: 12, maxWidth: 320 }}>{text.split("\n").map((l, i) => <div key={i} style={{ marginTop: i ? 4 : 0 }}>{l}</div>)}</div>} style={{ display: "inline-flex", color: C.mut, cursor: "help", verticalAlign: "middle" }}>
       <HelpCircle size={12} aria-label={t("profileList.import.why")} />
     </HoverTip>
   );

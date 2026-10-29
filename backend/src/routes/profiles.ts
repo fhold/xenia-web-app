@@ -23,6 +23,7 @@ import { isProfileFitList } from "../../../shared/src/types.js";
 import { validateBrewProfile } from "../../../shared/src/brew-steps.js";
 import { checkVariants } from "../db/variant-repo.js";
 import { SqliteBasketRepo } from "../db/basket-repo.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 function isPositiveYield(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -51,14 +52,14 @@ interface EffectiveProfile {
  */
 function checkProfileInvariants(p: EffectiveProfile): string | null {
   if (p.scriptIdSingle == null && p.brewSteps == null) {
-    return "A profile needs an execution mode: a Xenia script (scriptIdSingle) or a step sequence (brewSteps)";
+    return L("Ein Profil braucht eine Laufart: ein Xenia-Skript (scriptIdSingle) oder Stufen (brewSteps)", "A profile needs an execution mode: a Xenia script (scriptIdSingle) or a step sequence (brewSteps)");
   }
   // Every configured flow slot is weight-stopped — no yield target, no BBW stop.
   if (p.brewSteps != null && !isPositiveYield(p.yieldTargetSingleG)) {
-    return "yieldTargetSingleG (>0) is required when a step sequence is set";
+    return L("Mit Stufen braucht es yieldTargetSingleG (> 0)", "yieldTargetSingleG (>0) is required when a step sequence is set");
   }
   if (p.brewStepsDouble != null && !isPositiveYield(p.yieldTargetDoubleG)) {
-    return "yieldTargetDoubleG (>0) is required when a 2× sequence is set";
+    return L("Mit 2×-Stufen braucht es yieldTargetDoubleG (> 0)", "yieldTargetDoubleG (>0) is required when a 2× sequence is set");
   }
   for (const [field, bp] of [
     ["brewSteps", p.brewSteps],
@@ -74,17 +75,17 @@ function checkProfileInvariants(p: EffectiveProfile): string | null {
 // Wartung schaltet Ventile — das geht nur im Skript, nicht mit App-Stufen.
 export const kindError = (kind: unknown, variants: ProfileCreate["variants"]): string | null => {
   if (kind === undefined) return null;
-  if (kind !== "brew" && kind !== "maintenance" && kind !== "test") return "kind muss brew, maintenance oder test sein.";
-  if (kind === "maintenance" && variants?.some((v) => v.brewSteps != null)) return "Wartung geht nur mit Skript-Kurven, nicht in der App.";
+  if (kind !== "brew" && kind !== "maintenance" && kind !== "test") return L("kind muss brew, maintenance oder test sein.", "kind must be brew, maintenance or test.");
+  if (kind === "maintenance" && variants?.some((v) => v.brewSteps != null)) return L("Wartung geht nur mit Skript-Kurven, nicht in der App.", "Maintenance only works with script curves, not in the app.");
   return null;
 };
 // Versuch ist ein Schalter — SQLite nimmt sonst jeden Wert.
 export const trialError = (isTrial: unknown): string | null =>
-  (isTrial === undefined || typeof isTrial === "boolean" ? null : "isTrial muss true oder false sein.");
+  (isTrial === undefined || typeof isTrial === "boolean" ? null : L("isTrial muss true oder false sein.", "isTrial must be true or false."));
 export const archivedError = (isArchived: unknown): string | null =>
-  (isArchived === undefined || typeof isArchived === "boolean" ? null : "isArchived muss true oder false sein.");
+  (isArchived === undefined || typeof isArchived === "boolean" ? null : L("isArchived muss true oder false sein.", "isArchived must be true or false."));
 export const fitError = (fit: unknown): string | null =>
-  (fit === undefined || isProfileFitList(fit) ? null : "fit muss eine Liste aus dark, light, filter sein (ohne Doppel).");
+  (fit === undefined || isProfileFitList(fit) ? null : L("fit muss eine Liste aus dark, light, filter sein (ohne Doppel).", "fit must be a list of dark, light, filter (no duplicates)."));
 
 export function registerProfileRoutes(
   app: FastifyInstance,
@@ -120,7 +121,7 @@ export function registerProfileRoutes(
     const { ids } = req.body as { ids: unknown };
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== "number")) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "ids must be an array of numbers" };
+      const res: ApiResponse = { ok: false, error: L("ids muss eine Liste von Zahlen sein", "ids must be an array of numbers") };
       return res;
     }
     profileRepo.reorder(ids as number[]);
@@ -137,13 +138,13 @@ export function registerProfileRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid profile ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Profil-ID", "Invalid profile ID") };
       return res;
     }
     const profile = profileRepo.findById(numId);
     if (!profile) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Profile ${id} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Profil ${id} nicht gefunden`, `Profile ${id} not found`) };
       return res;
     }
     return profile;
@@ -157,7 +158,7 @@ export function registerProfileRoutes(
 
     if (!body.name?.trim()) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "name is required" };
+      const res: ApiResponse = { ok: false, error: L("Name fehlt", "name is required") };
       return res;
     }
 
@@ -169,7 +170,7 @@ export function registerProfileRoutes(
       reply.status(400);
       const res: ApiResponse = {
         ok: false,
-        error: `Script ${body.scriptIdSingle} not found`,
+        error: L(`Skript ${body.scriptIdSingle} nicht gefunden`, `Script ${body.scriptIdSingle} not found`),
       };
       return res;
     }
@@ -180,7 +181,7 @@ export function registerProfileRoutes(
         reply.status(400);
         const res: ApiResponse = {
           ok: false,
-          error: `Double script ${body.scriptIdDouble} not found`,
+          error: L(`2×-Skript ${body.scriptIdDouble} nicht gefunden`, `Double script ${body.scriptIdDouble} not found`),
         };
         return res;
       }
@@ -217,14 +218,14 @@ export function registerProfileRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid profile ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Profil-ID", "Invalid profile ID") };
       return res;
     }
 
     const existing = profileRepo.findById(numId);
     if (!existing) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Profile ${id} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Profil ${id} nicht gefunden`, `Profile ${id} not found`) };
       return res;
     }
 
@@ -237,7 +238,7 @@ export function registerProfileRoutes(
         reply.status(400);
         const res: ApiResponse = {
           ok: false,
-          error: `Script ${patch.scriptIdSingle} not found`,
+          error: L(`Skript ${patch.scriptIdSingle} nicht gefunden`, `Script ${patch.scriptIdSingle} not found`),
         };
         return res;
       }
@@ -249,7 +250,7 @@ export function registerProfileRoutes(
         reply.status(400);
         const res: ApiResponse = {
           ok: false,
-          error: `Double script ${patch.scriptIdDouble} not found`,
+          error: L(`2×-Skript ${patch.scriptIdDouble} nicht gefunden`, `Double script ${patch.scriptIdDouble} not found`),
         };
         return res;
       }
@@ -297,12 +298,12 @@ export function registerProfileRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid profile ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Profil-ID", "Invalid profile ID") };
       return res;
     }
     if (!profileRepo.findById(numId)) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Profile ${id} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Profil ${id} nicht gefunden`, `Profile ${id} not found`) };
       return res;
     }
     profileRepo.delete(numId);

@@ -12,6 +12,8 @@
  * ProfileEditor so front- and backend accept exactly the same values.
  */
 
+import { L } from "./shared-lang.js";
+
 /** Inclusive plausibility range — guards against typos like 960 instead of 96. */
 export const TARGET_TEMP_MIN_C = 70;
 export const TARGET_TEMP_MAX_C = 110;
@@ -33,12 +35,12 @@ export function parseTargetTempC(value: unknown): TargetTempParse {
     return { ok: true, value: null };
   }
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return { ok: false, error: "targetTempC must be a finite number or null" };
+    return { ok: false, error: L("Zieltemperatur muss eine Zahl oder leer sein", "targetTempC must be a finite number or null") };
   }
   if (value < TARGET_TEMP_MIN_C || value > TARGET_TEMP_MAX_C) {
     return {
       ok: false,
-      error: `targetTempC must be between ${TARGET_TEMP_MIN_C} and ${TARGET_TEMP_MAX_C} °C`,
+      error: L(`Zieltemperatur muss zwischen ${TARGET_TEMP_MIN_C} und ${TARGET_TEMP_MAX_C} °C liegen`, `targetTempC must be between ${TARGET_TEMP_MIN_C} and ${TARGET_TEMP_MAX_C} °C`),
     };
   }
   return { ok: true, value };

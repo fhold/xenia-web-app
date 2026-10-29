@@ -4,18 +4,6 @@ import { scriptEditor as scriptEditorDe } from "./de/scriptEditor.js";
 import { ui as uiDe } from "./de/ui.js";
 
 export const de = {
-  bestBrew: {
-    noneShort: "noch keine Referenz",
-    flag: "Als Best-Brew markieren",
-    unflag: "Best-Brew-Markierung entfernen",
-    slotLabel: "Best-Brew",
-    empty: "Noch keine Best-Brew-Referenz",
-    time: "Zeit",
-    ratio: "Ratio",
-    peak: "Peak-Druck",
-    temp: "Ø-Temp",
-    profile: "Profil",
-  },
   beans: {
     title: "Bohnen",
     add: "Bohne anlegen",
@@ -285,6 +273,10 @@ export const de = {
         label: "Soll-Kurve im Detail",
         description: "Im History-Detail die kommandierte Soll-Kurve über die Messkurve legen (pro Ansicht umschaltbar)",
       },
+      liveSoll: {
+        label: "Soll-Kurve im Live-Diagramm",
+        description: "Zeichnet bei App-Bezügen gestrichelt, was die laufende Stufe vorgibt (Druck oder Fluss).",
+      },
       ghosts: {
         label: "Verlauf früherer Bezüge",
         description: "Zeichnet vergangene Bezüge derselben Brühdefinition blass hinter die Kurve. Wo viele übereinanderliegen, wird es dunkler.",
@@ -464,7 +456,7 @@ export const de = {
       title: "Oberfläche",
       theme: {
         label: "Darstellung",
-        description: "Gilt für alle Geräte; Wechsel lädt die Seite neu",
+        description: "Gilt für dieses Gerät; Wechsel lädt die Seite neu",
         options: { dark: "Dunkel", light: "Hell", system: "Wie System" },
       },
       schemes: {
@@ -660,7 +652,7 @@ export const de = {
       postShotNotice: "⚠ Waage eingefroren — die Maschine meldete den ganzen Bezug dasselbe Gewicht. Yield unbekannt. Bitte Waage prüfen / neu verbinden und Bezug wiederholen.",
     },
     scaleLost: {
-      postShotNotice: "⚠ Waage während des Bezugs ausgefallen — Gewicht und Flow verstummten gleichzeitig, während die Pumpe lief. Yield unbekannt. Bitte Waage prüfen / neu verbinden.",
+      postShotNotice: "⚠ Gewicht während des Bezugs verloren — die Waage verstummte, während die Pumpe lief, oder die Maschine war nicht erreichbar. Yield unbekannt. Bitte Waage bzw. WLAN der Maschine prüfen.",
     },
     edit: "Bearbeiten",
     delete: "Löschen",
@@ -735,7 +727,6 @@ export const de = {
     compare: {
       action: "Vergleichen",
       banner: "Vergleich mit #{id} · {profile} — zweiten Bezug antippen",
-      suggestReferenceTip: "Mit der Referenz dieser Sorte vergleichen",
       suggestPrevious: "Vorheriger #{id}",
       suggestPreviousTip: "Mit dem Bezug davor (gleiche Sorte) vergleichen",
       cancel: "Abbrechen",

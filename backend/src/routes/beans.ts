@@ -17,6 +17,7 @@ import type {
   CoffeeCreate,
 } from "../../../shared/src/types.js";
 import { bestSureMatch } from "../lib/coffee-matching.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 const VALID_RATINGS = new Set<BeanRating>(["thumbs_down", "meh", "thumbs_up"]);
 
@@ -42,7 +43,7 @@ function brewTypeError(body: Record<string, unknown>): string | null {
   const v = body["brewType"];
   if (v === null || v === undefined) return null;
   if (typeof v === "string" && VALID_BREW_TYPES.has(v)) return null;
-  return "brewType must be one of: espresso, filter, omni (or null)";
+  return L("Zubereitung muss espresso, filter oder omni sein (oder leer)", "brewType must be one of: espresso, filter, omni (or null)");
 }
 
 // Fields accepted from the JSON import payload (maps from import key → BeanCreate key)
@@ -134,9 +135,9 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const bean = beanRepo.findById(id);
-      if (!bean) return reply.status(404).send({ error: "Bean not found" });
+      if (!bean) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       return bean;
     },
   );
@@ -154,7 +155,7 @@ export function registerBeanRoutes(
       const body = req.body as Record<string, unknown> | null | undefined;
       const name = body?.name;
       if (typeof name !== "string" || name.trim() === "") {
-        return reply.status(400).send({ error: "name is required" });
+        return reply.status(400).send({ error: L("Name fehlt", "name is required") });
       }
       const btErr = brewTypeError(body ?? {});
       if (btErr) return reply.status(400).send({ error: btErr });
@@ -177,8 +178,8 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       const body = (req.body ?? {}) as Record<string, unknown>;
       const btErr = brewTypeError(body);
       if (btErr) return reply.status(400).send({ error: btErr });
@@ -201,20 +202,20 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
 
       const { status, date } = req.body;
       const validStatuses: BeanStatus[] = ["stock", "frozen", "thawed", "archived"];
       if (!validStatuses.includes(status as BeanStatus)) {
         return reply.status(400).send({
-          error: `status must be one of: ${validStatuses.join(", ")}`,
+          error: L(`Status muss einer dieser Werte sein: ${validStatuses.join(", ")}`, `status must be one of: ${validStatuses.join(", ")}`),
         });
       }
       if (date !== undefined && typeof date !== "string") {
-        return reply.status(400).send({ error: "date must be an ISO 8601 string" });
+        return reply.status(400).send({ error: L("Datum muss im ISO-8601-Format sein", "date must be an ISO 8601 string") });
       }
 
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       beanRepo.setStatus(id, status as BeanStatus, date as string | undefined);
       return { ok: true };
     },
@@ -232,12 +233,12 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const isActive = req.body?.isActive;
       if (typeof isActive !== "boolean") {
-        return reply.status(400).send({ error: "isActive (boolean) is required" });
+        return reply.status(400).send({ error: L("isActive (true/false) fehlt", "isActive (boolean) is required") });
       }
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       beanRepo.setActive(id, isActive);
       return { ok: true };
     },
@@ -257,16 +258,16 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
 
       const openNextId = req.body?.openNextId;
       if (openNextId !== undefined && openNextId !== null) {
         if (typeof openNextId !== "number" || !Number.isInteger(openNextId)) {
-          return reply.status(400).send({ error: "openNextId must be an integer" });
+          return reply.status(400).send({ error: L("openNextId muss eine ganze Zahl sein", "openNextId must be an integer") });
         }
         if (!beanRepo.findById(openNextId)) {
-          return reply.status(404).send({ error: "Next roasting not found" });
+          return reply.status(404).send({ error: L("Nächste Röstung nicht gefunden", "Next roasting not found") });
         }
       }
 
@@ -291,8 +292,8 @@ export function registerBeanRoutes(
     "/api/beans/:id/stock-alert/dismiss",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       beanRepo.dismissStockAlert(id);
       return { ok: true };
     },
@@ -317,13 +318,13 @@ export function registerBeanRoutes(
       const raw = req.body as Record<string, unknown> | null | undefined;
 
       if (!raw || typeof raw !== "object") {
-        return reply.status(400).send({ error: "Body must be a JSON object" });
+        return reply.status(400).send({ error: L("Der Inhalt muss ein JSON-Objekt sein", "Body must be a JSON object") });
       }
 
       // Validate required field
       const name = raw["name"];
       if (typeof name !== "string" || name.trim() === "") {
-        return reply.status(400).send({ error: "name ist erforderlich" });
+        return reply.status(400).send({ error: L("Name fehlt", "name is required") });
       }
 
       const bean: BeanCreate = { name: name.trim() };
@@ -401,13 +402,13 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const coffeeId = req.body?.coffeeId;
       if (typeof coffeeId !== "number" || !Number.isInteger(coffeeId)) {
-        return reply.status(400).send({ error: "coffeeId (integer) is required" });
+        return reply.status(400).send({ error: L("coffeeId (ganze Zahl) fehlt", "coffeeId (integer) is required") });
       }
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
-      if (!coffeeRepo.findById(coffeeId)) return reply.status(404).send({ error: "Target coffee not found" });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
+      if (!coffeeRepo.findById(coffeeId)) return reply.status(404).send({ error: L("Ziel-Sorte nicht gefunden", "Target coffee not found") });
       beanRepo.move(id, coffeeId);
       return { ok: true };
     },
@@ -425,12 +426,12 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const rating = req.body?.rating;
       if (rating !== null && !(typeof rating === "string" && VALID_RATINGS.has(rating as BeanRating))) {
-        return reply.status(400).send({ error: "rating must be a BeanRating or null" });
+        return reply.status(400).send({ error: L("Bewertung ungültig (BeanRating oder leer)", "rating must be a BeanRating or null") });
       }
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       beanRepo.setRatingOverride(id, (rating as BeanRating | null) ?? null);
       return { ok: true };
     },
@@ -446,8 +447,8 @@ export function registerBeanRoutes(
       reply: FastifyReply,
     ) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!beanRepo.findById(id)) return reply.status(404).send({ error: "Bean not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!beanRepo.findById(id)) return reply.status(404).send({ error: L("Bohne nicht gefunden", "Bean not found") });
       beanRepo.delete(id);
       return { ok: true };
     },

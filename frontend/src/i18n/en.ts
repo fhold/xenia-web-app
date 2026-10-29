@@ -4,18 +4,6 @@ import { scriptEditor as scriptEditorEn } from "./en/scriptEditor.js";
 import { ui as uiEn } from "./en/ui.js";
 
 export const en = {
-  bestBrew: {
-    noneShort: "no reference yet",
-    flag: "Mark as best brew",
-    unflag: "Remove best-brew mark",
-    slotLabel: "Best Brew",
-    empty: "No best-brew reference yet",
-    time: "Time",
-    ratio: "Ratio",
-    peak: "Peak pressure",
-    temp: "Avg temp",
-    profile: "Profile",
-  },
   beans: {
     title: "Beans",
     add: "Add bean",
@@ -285,6 +273,10 @@ export const en = {
         label: "Target curve in detail",
         description: "Overlay the script's commanded target curve on the measured chart in shot detail (toggleable per view)",
       },
+      liveSoll: {
+        label: "Target curve in the live chart",
+        description: "For app-driven shots, draws dashed what the running stage asks for (pressure or flow).",
+      },
       ghosts: {
         label: "Past shot history",
         description: "Draws past shots of the same brew definition faintly behind the curve. Where many overlap it gets darker.",
@@ -464,7 +456,7 @@ export const en = {
       title: "Interface",
       theme: {
         label: "Appearance",
-        description: "Applies to all devices; switching reloads the page",
+        description: "Applies to this device; switching reloads the page",
         options: { dark: "Dark", light: "Light", system: "Match system" },
       },
       schemes: {
@@ -660,7 +652,7 @@ export const en = {
       postShotNotice: "⚠ Scale frozen — the machine reported the same weight for the whole brew. Yield unknown. Please check / reconnect the scale and repeat the shot.",
     },
     scaleLost: {
-      postShotNotice: "⚠ Scale dropped out mid-brew — weight and flow went silent together while the pump was running. Yield unknown. Check / reconnect the scale.",
+      postShotNotice: "⚠ Weight lost mid-brew — the scale went silent while the pump was running, or the machine was unreachable. Yield unknown. Check the scale or the machine's Wi-Fi.",
     },
     edit: "Edit",
     delete: "Delete",
@@ -735,7 +727,6 @@ export const en = {
     compare: {
       action: "Compare",
       banner: "Comparing with #{id} · {profile} — tap a second shot",
-      suggestReferenceTip: "Compare with this coffee's reference",
       suggestPrevious: "Previous #{id}",
       suggestPreviousTip: "Compare with the shot before (same coffee)",
       cancel: "Cancel",

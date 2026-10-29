@@ -8,7 +8,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { LiveFrame, Shot, ShotDetail } from "@shared/types";
+import type { BrewStep, LiveFrame, Shot, ShotDetail, ShotStage } from "@shared/types";
+import { brewEndSeconds } from "@shared/live-stage.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,10 +30,35 @@ export interface ChartSample {
   pumpPwm: number | null;
 }
 
+/** Gespeicherte Stufen des beendeten Bezugs — die Soll-Kurve danach (auch nach
+ *  dem Neuladen) kommt wie in der Historie aus der DB. */
+export interface EndedShotStages {
+  shotId: number;
+  stages: ShotStage[];
+  /** Profil-Schnappschuss des Bezugs (leer bei Skript-Bezügen). */
+  steps: BrewStep[];
+  /** Ende des Brühens in Sekunden (Pumpenstopp). */
+  brewEndS: number;
+}
+
 interface UseShotSamplesArgs {
   frame: LiveFrame | null;
   activeShot: Shot | null;
   lastEndedShot: Shot | null;
+}
+
+/** Ab so viel ms nach Bezugsbeginn gilt ein Bezug als „mitten drin“ betreten. */
+const JOIN_LATE_MS = 2_000;
+
+function toChartSamples(detail: ShotDetail): ChartSample[] {
+  return detail.samples.map((s) => ({
+    t: parseFloat((s.elapsedMs / 1000).toFixed(2)),
+    pressure: s.pressureBar,
+    flow: s.flowMlS,
+    temp: s.tempBgC,
+    weight: s.weightG,
+    pumpPwm: s.pumpPwm,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -43,8 +69,9 @@ export function useShotSamples({
   frame,
   activeShot,
   lastEndedShot,
-}: UseShotSamplesArgs): { samples: ChartSample[] } {
+}: UseShotSamplesArgs): { samples: ChartSample[]; ended: EndedShotStages | null } {
   const [samples, setSamples] = useState<ChartSample[]>([]);
+  const [ended, setEnded] = useState<EndedShotStages | null>(null);
 
   // Which shot ID we last cleared/started for
   const activeShotIdRef = useRef<number | null>(null);
@@ -59,6 +86,23 @@ export function useShotSamples({
 
     activeShotIdRef.current = activeShot.id;
     setSamples([]);
+
+    // Mitten im Bezug dazugekommen (Neuladen, zweites Gerät): die bisherigen
+    // Messpunkte schreibt der Recorder laufend in die DB — nachladen, die schon
+    // live angekommenen dahinter behalten.
+    if (Date.now() - activeShot.startedAt < JOIN_LATE_MS) return;
+    const id = activeShot.id;
+    fetch(`/api/shots/${id}`)
+      .then((r) => r.json() as Promise<ShotDetail>)
+      .then((detail) => {
+        if (activeShotIdRef.current !== id) return;
+        const past = toChartSamples(detail);
+        const lastT = past.length > 0 ? past[past.length - 1]!.t : -1;
+        setSamples((live) => [...past, ...live.filter((s) => s.t > lastT)]);
+      })
+      .catch((err: unknown) => {
+        console.warn("[useShotSamples] Failed to fetch running shot:", err);
+      });
   }, [activeShot?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Accumulate live samples from each incoming frame ----
@@ -109,14 +153,13 @@ export function useShotSamples({
       .then((r) => r.json() as Promise<ShotDetail>)
       .then((detail) => {
         // Atomic replace — no intermediate clear, no blank-chart flash
-        setSamples(detail.samples.map((s) => ({
-          t: parseFloat((s.elapsedMs / 1000).toFixed(2)),
-          pressure: s.pressureBar,
-          flow: s.flowMlS,
-          temp: s.tempBgC,
-          weight: s.weightG,
-          pumpPwm: s.pumpPwm,
-        })));
+        setSamples(toChartSamples(detail));
+        setEnded({
+          shotId: detail.shot.id,
+          stages: detail.stages,
+          steps: detail.brewSteps?.steps ?? [],
+          brewEndS: brewEndSeconds(detail.samples),
+        });
       })
       .catch((err: unknown) => {
         // Keep live samples — better a slightly imprecise chart than an empty one
@@ -124,5 +167,5 @@ export function useShotSamples({
       });
   }, [lastEndedShot?.id, activeShot]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { samples };
+  return { samples, ended };
 }

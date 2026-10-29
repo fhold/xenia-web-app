@@ -32,7 +32,6 @@ function createSchema(): void {
     CREATE TABLE coffee (id INTEGER PRIMARY KEY, name TEXT, roaster TEXT, brew_type TEXT);
     CREATE TABLE bean (id INTEGER PRIMARY KEY, coffee_id INTEGER REFERENCES coffee(id));
     CREATE TABLE grinder (id INTEGER PRIMARY KEY, name TEXT);
-    CREATE TABLE best_brew (coffee_id INTEGER PRIMARY KEY, shot_id INTEGER, created_at INTEGER);
     CREATE TABLE shot (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         profile_id     INTEGER REFERENCES profile(id) ON DELETE SET NULL,

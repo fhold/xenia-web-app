@@ -131,7 +131,6 @@ export const profileList = {
     ratingAria: "Average rating {avg} of 5, {n} rated",
     noShotsVariant: "No shot with this variant yet.",
     inHistory: "In the history ({n})",
-    reference: "Reference",
     coffee: "Coffee",
   },
 };

@@ -46,7 +46,7 @@ test("Tcl-Listen: Woerter, verschachtelte {…}, \"…\" und Escapes", () => {
 test("80's Espresso: Füllen → Preinfusion (Deckel 25 s), Halten mit Rampe, Abstieg gleitend; eine Temperatur", () => {
   const r = ok(file("80s_espresso.tcl"));
   assert.deepEqual(r.steps, [
-    { kind: "preinfusion", name: "preinfusion", gentleness: "normal", exit: { pressureBar: 3.8, seconds: 25 } },
+    { kind: "preinfusion", name: "preinfusion", gentleness: "normal", fill: "fast", exit: { pressureBar: 3.8, seconds: 25 } },
     { kind: "pressure", name: "rise and hold", targetPressureBar: 7.8, rampMs: 3000, exit: { seconds: 4 } },
     { kind: "pressure", name: "decline", targetPressureBar: 5, rampMs: 50000, exit: {} },
   ] satisfies BrewStep[]);
@@ -56,7 +56,7 @@ test("80's Espresso: Füllen → Preinfusion (Deckel 25 s), Halten mit Rampe, Ab
   assert.equal(r.profile.isTrial, true);
   assert.match(r.profile.notes!, /^Aus Decent „80's Espresso“ \(Decent\)\n\nFor medium to dark roasted beans\./);
   assert.deepEqual(r.rows.map((x) => [x.group, x.name, x.decent, x.xenia, x.status]), [
-    ["step", "preinfusion start + preinfusion", "Fluss 7,5 ml/s bis 3,8 bar · höchstens 8 s", "Preinfusion · bis 3,8 bar · höchstens 25 s", "changed"],
+    ["step", "preinfusion start + preinfusion", "Fluss 7,5 ml/s bis 3,8 bar · höchstens 8 s", "Preinfusion · volle Pumpe ~5,6 ml/s, ab 1 bar 2 ml/s · bis 3,8 bar · höchstens 25 s", "changed"],
     ["step", "rise and hold", "Druck 7,8 bar · 4 s", "Druck 7,8 bar · Rampe 3 s · 4 s", "changed"],
     ["step", "decline", "Druck gleitend auf 5 bar · 50 s", "Druck gleitend auf 5 bar · bis 36 g", "same"],
     ["profile", "Temperatur", "82 → 80 → 72 °C", "80 °C (aus „rise and hold“)", "changed"],
@@ -116,7 +116,8 @@ test("TurboBloom: Fluss 0 = Pumpe aus mit „Ende unter 2,2 bar“; Ausstieg „
 
 test("V60: Benetzen nach der Uhr vor dem Bloom → Preinfusion 8 s (kein 25-s-Deckel), Pausen, Ziel aus dem Titel", () => {
   const r = ok(file("v60_15g.tcl"));
-  assert.deepEqual(r.steps[0], { kind: "preinfusion", name: "preinfusion", gentleness: "normal", exit: { seconds: 8 } });
+  assert.deepEqual(r.steps[0], { kind: "preinfusion", name: "preinfusion", gentleness: "normal", fill: "fast", exit: { seconds: 8 } });
+  assert.match(rowOf(r.rows, "preinfusion").why!, /mit voller Pumpe \(~5,6 ml\/s statt 8\)/);
   assert.deepEqual(r.steps.map((s) => s.kind), ["preinfusion", "power", "flow", "power", "flow", "power", "flow"]);
   // „V60 15g in, 250g out“ — nicht Fluss × Zeit (344 ml Wasser in den Kaffee)
   assert.equal(r.yieldG, 250);
@@ -230,32 +231,74 @@ test("Rampe nach dem Füllen nur bei einem Sprung nach oben, nicht beim Abfall (
 
 // --- Korrekturen nach den Messläufen (23.10.) -----------------------------------
 
-test("Druck-Füllung (Ziel über dem eigenen Ausstieg) → Preinfusion schnell + zügig, Vorlauf zählt mit; Temperatur der Stufe danach", () => {
-  // Damian's Q / LRv3: „6 bar bis 3 bar“ fährt die Decent mit voller Pumpe (IgnoreLimit)
+test("Druck-Füllung (Ziel über dem eigenen Ausstieg) → Preinfusion mit voller Pumpe, Vorlauf zählt mit; Temperatur der Stufe danach", () => {
+  // Damian's Q / LRv3: „6 bar bis 3 bar“ fährt die Decent mit voller Pumpe (IgnoreLimit); danach Fluss → ab 1 bar zügig
   const r = ok(tcl([
     "name {Fill start} pump pressure pressure 6 seconds 2 temperature 84",
     "name Filling pump pressure pressure 6 seconds 25 exit_if 1 exit_type pressure_over exit_pressure_over 3 temperature 84",
     "name Pouring pump flow flow 1.8 seconds 60 temperature 94",
   ]));
-  assert.deepEqual(r.steps[0], { kind: "preinfusion", name: "Filling", gentleness: "brisk", fill: "fast", exit: { pressureBar: 3, seconds: 27 } });
+  assert.deepEqual(r.steps[0], { kind: "preinfusion", name: "Filling", gentleness: "normal", fill: "fast", exit: { pressureBar: 3, seconds: 27 } });
   assert.equal(r.steps[1]!.kind, "flow");
   const row = rowOf(r.rows, "Fill start + Filling");
   assert.equal(row.decent, "Druck 6 bar · bis 3 bar · höchstens 25 s");
-  assert.match(row.xenia!, /^Preinfusion · schnell füllen · zügig tränken/);
-  assert.match(row.why!, /#158\/#159/);
+  assert.match(row.xenia!, /^Preinfusion · volle Pumpe ~5,6 ml\/s, ab 1 bar 2 ml\/s · bis 3 bar/);
+  assert.match(row.why!, /\(#158\/#159\) — daher als Preinfusion\.\nAb 1 bar gebremst: Auf der Decent steigt der Druck beim Füllen nur um 0,4–1 bar\/s/);
   assert.equal(r.profile.targetTempC, 94);
 });
 
-test("Langsame Fluss-Füllung (unter 3 ml/s) → Preinfusion sanft, mit Begründung", () => {
-  const r = ok(tcl([
-    "name Fill pump flow flow 1.5 transition fast seconds 30 exit_if 1 exit_type pressure_over exit_pressure_over 2 temperature 92",
+test("Langsame Fluss-Füllung (unter 3 ml/s) → tränken mit der Stufe nächst Decents Rate, mit Begründung", () => {
+  const slow = (mls: number) => ok(tcl([
+    `name Fill pump flow flow ${mls} transition fast seconds 30 exit_if 1 exit_type pressure_over exit_pressure_over 2 temperature 92`,
     "name Hold pump flow flow 2.5 seconds 25 temperature 92",
   ]));
+  const r = slow(1.5);
   assert.equal((r.steps[0] as { gentleness?: string }).gentleness, "gentle");
   assert.equal((r.steps[0] as { fill?: string }).fill, undefined);
-  assert.match(rowOf(r.rows, "Fill").why!, /füllt langsam \(1,5 ml\/s\)/);
-  // 6 ml/s bleibt wie bisher
-  assert.equal((ok(tcl([fill, "name Hold pump flow flow 2 seconds 25 temperature 92"])).steps[0] as { gentleness?: string }).gentleness, "normal");
+  assert.match(rowOf(r.rows, "Fill").why!, /\nSo langsam fördert die Pumpe ohne Gegendruck nicht zuverlässig \(unter 25 % gar nicht, ab 25 % rund 2 ml\/s\) — daher bis 1 bar 3,5 ml\/s\.$/);
+  assert.equal(rowOf(r.rows, "Fill").xenia, "Preinfusion · 3,5 ml/s, ab 1 bar 1,5 ml/s · bis 2 bar · höchstens 30 s");
+  assert.equal((slow(2).steps[0] as { gentleness?: string }).gentleness, "normal");
+  assert.equal((slow(2.4).steps[0] as { gentleness?: string }).gentleness, "brisk");
+  assert.match(rowOf(slow(2.4).rows, "Fill").xenia!, /ab 1 bar 2,5 ml\/s/);
+  // 6 ml/s bremst ab 1 bar mit „normal“, auch wenn der Druck danach weit steigt
+  assert.equal((ok(tcl([fill, "name Rise pump pressure pressure 9 seconds 25 temperature 92"])).steps[0] as { gentleness?: string }).gentleness, "normal");
+});
+
+test("Schnelle Fluss-Füllung (näher an voller Pumpe als an 3,5 ml/s) → volle Pumpe, ab 1 bar gebremst; bis 4,5 ml/s mit 3,5 ml/s", () => {
+  const withFill = (mls: number) => ok(tcl([
+    `name Fill pump flow flow ${mls} transition fast seconds 10 exit_if 1 exit_type pressure_over exit_pressure_over 4 temperature 92`,
+    "name Rise pump pressure pressure 9 seconds 25 temperature 92",
+  ]));
+  const first = (mls: number) => withFill(mls).steps[0] as { fill?: string; gentleness?: string };
+  assert.deepEqual([first(8).fill, first(8).gentleness], ["fast", "normal"]);
+  assert.equal(first(5).fill, "fast");
+  assert.deepEqual([first(4.5).fill, first(4.5).gentleness], [undefined, "normal"]);
+  assert.deepEqual([first(4).fill, first(4).gentleness], [undefined, "normal"]);
+  assert.match(rowOf(withFill(8).rows, "Fill").why!, /\nMehr als ~5,6 ml\/s fördert die Pumpe nicht\.\n/);
+  assert.equal(rowOf(withFill(8).rows, "Fill").xenia, "Preinfusion · volle Pumpe ~5,6 ml/s, ab 1 bar 2 ml/s · bis 4 bar · höchstens 25 s");
+  assert.doesNotMatch(rowOf(withFill(4).rows, "Fill").why!, /schnell/);
+  assert.match(rowOf(withFill(4).rows, "Fill").why!, /\nDie Preinfusion füllt mit 3,5 ml\/s oder voller Pumpe — 3,5 liegt näher an Decents 4 ml\/s\.\n/);
+  assert.equal(rowOf(withFill(4).rows, "Fill").xenia, "Preinfusion · 3,5 ml/s, ab 1 bar 2 ml/s · bis 4 bar · höchstens 25 s");
+});
+
+test("Schnelle Füllung bremst ab 1 bar („normal“), egal was danach kommt — so steigt der Druck wie auf der Decent", () => {
+  const after = (next: string, exitBar = 4) => ok(tcl([
+    `name Fill pump flow flow 8 transition fast seconds 10 exit_if 1 exit_type pressure_over exit_pressure_over ${exitBar} temperature 92`,
+    next,
+  ]));
+  const soak = (next: string, exitBar?: number) => (after(next, exitBar).steps[0] as { gentleness?: string }).gentleness;
+  for (const next of [
+    "name Rise pump pressure pressure 8 seconds 25 temperature 92",
+    "name Bloom pump flow flow 0 seconds 10 temperature 92",
+    "name Infuse pump pressure pressure 4 seconds 10 temperature 92",
+    "name Pour pump flow flow 2 seconds 25 temperature 92",
+  ]) assert.equal(soak(next), "normal", next);
+  const row = rowOf(after("name Infuse pump pressure pressure 4 seconds 10 temperature 92").rows, "Fill");
+  assert.equal(row.xenia, "Preinfusion · volle Pumpe ~5,6 ml/s, ab 1 bar 2 ml/s · bis 4 bar · höchstens 25 s");
+  assert.match(row.why!, /\nAb 1 bar gebremst: Auf der Decent steigt der Druck beim Füllen nur um 0,4–1 bar\/s, weil der Puck noch Wasser aufnimmt\. Bei uns tropft es dann schon — ungebremst bis 4 bar spränge der Druck\.\nHöchstens 25 statt 10 s: Das Füllen dauert hier länger \(bis 3,8 bar 6–9 s\), die Zeit ist nur ein Schutz\.$/);
+  assert.doesNotMatch(row.why!, /„keine“/);
+  // Ausstieg bei 1 bar: dort gibt es nichts zu bremsen, also auch keinen Satz dazu
+  assert.doesNotMatch(rowOf(after("name Infuse pump pressure pressure 3 seconds 10 temperature 92", 1).rows, "Fill").why!, /gebremst/);
 });
 
 test("Gleitend auf 0: ab 5 s Druck- bzw. Flussrampe statt Pumpe aus; 1 s am Ende bleibt Pumpe aus", () => {

@@ -25,6 +25,7 @@ import { driveStartBody } from "../lib/body-schemas.js";
 import { resolveStart } from "../db/variant-repo.js";
 import { SqliteBasketRepo } from "../db/basket-repo.js";
 import { endsWithoutYield } from "../../../shared/src/brew-steps.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 export function registerDriveRoutes(
   app: FastifyInstance,
@@ -50,7 +51,7 @@ export function registerDriveRoutes(
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: "Es läuft bereits ein Bezug. Bitte zuerst beenden.",
+        error: L("Es läuft bereits ein Bezug. Bitte zuerst beenden.", "A brew is already running. Please finish it first."),
       };
       return res;
     }
@@ -83,7 +84,7 @@ export function registerDriveRoutes(
     const profile = profileRepo.findById(profileId);
     if (!profile) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Profile ${profileId} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Profil ${profileId} nicht gefunden`, `Profile ${profileId} not found`) };
       return res;
     }
 
@@ -97,7 +98,7 @@ export function registerDriveRoutes(
     }
     if (start.fromVariant && !start.brewSteps) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Diese Variante läuft als Skript, nicht in der App." };
+      const res: ApiResponse = { ok: false, error: L("Diese Variante läuft als Skript, nicht in der App.", "This variant runs as a script, not in the app.") };
       return res;
     }
     const shotSize = start.shotSize;
@@ -134,7 +135,7 @@ export function registerDriveRoutes(
       reply.status(400);
       const res: ApiResponse = {
         ok: false,
-        error: "Ohne Zielgewicht braucht die letzte Stufe einen Ausstieg (Zeit, Gewicht, Druck oder Fluss).",
+        error: L("Ohne Zielgewicht braucht die letzte Stufe einen Ausstieg (Zeit, Gewicht, Druck oder Fluss).", "Without a target weight the last stage needs an exit (time, weight, pressure or flow)."),
       };
       return res;
     }
@@ -202,7 +203,7 @@ export function registerDriveRoutes(
   app.post("/api/drive/consistent-flow/stop", async (_req, reply) => {
     if (!driver.isActive()) {
       reply.status(409);
-      const res: ApiResponse = { ok: false, error: "Kein Flow-Hold-Bezug aktiv." };
+      const res: ApiResponse = { ok: false, error: L("Kein App-Bezug aktiv.", "No app-driven brew is running.") };
       return res;
     }
     driver.requestStop();

@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import type { ShotRepo } from "../db/shot-repo.js";
 import type { ApiResponse } from "../../../shared/src/types.js";
 import { groupNetwork, type CoffeeNetwork, type ProfileNetwork } from "../../../shared/src/network.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 export function registerNetworkRoutes(app: FastifyInstance, shotRepo: ShotRepo): void {
   const idOf = (raw: unknown) => parseInt((raw as { id: string }).id, 10);
@@ -20,7 +21,7 @@ export function registerNetworkRoutes(app: FastifyInstance, shotRepo: ShotRepo):
     const coffeeId = idOf(req.params);
     if (Number.isNaN(coffeeId)) {
       reply.status(400);
-      return { ok: false, error: "Invalid coffee ID" } as ApiResponse;
+      return { ok: false, error: L("Ungültige Sorten-ID", "Invalid coffee ID") } as ApiResponse;
     }
     const shots = shotRepo.listNetworkShots({ coffeeId });
     const groups = groupNetwork(
@@ -36,7 +37,7 @@ export function registerNetworkRoutes(app: FastifyInstance, shotRepo: ShotRepo):
     const profileId = idOf(req.params);
     if (Number.isNaN(profileId)) {
       reply.status(400);
-      return { ok: false, error: "Invalid profile ID" } as ApiResponse;
+      return { ok: false, error: L("Ungültige Profil-ID", "Invalid profile ID") } as ApiResponse;
     }
     const groups = groupNetwork(
       shotRepo.listNetworkShots({ profileId }),

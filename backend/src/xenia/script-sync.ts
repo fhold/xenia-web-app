@@ -15,6 +15,7 @@ import {
 import { serializeScript } from "../../../shared/src/script-serializer.js";
 import type { XeniaClient } from "./client.js";
 import type { ScriptRepo } from "../db/script-repo.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 // ---------------------------------------------------------------------------
 // Full sync
@@ -181,9 +182,10 @@ export async function createScriptOnMachine(
   const used = (await client.scriptsList()).index_list;
   const id = nextFreeScriptId(used);
   if (id === null) {
-    throw new Error(
+    throw new Error(L(
       `Kein freier Skriptplatz zwischen ${FIRST_SCRIPT_SLOT} und ${INVISIBLE_FROM_SLOT - 1}`,
-    );
+      `No free script slot between ${FIRST_SCRIPT_SLOT} and ${INVISIBLE_FROM_SLOT - 1}`,
+    ));
   }
   const before = new Set(used);
   await client.scriptCreate({ scriptId: id, name: title, instruction: content });
@@ -198,8 +200,8 @@ export async function createScriptOnMachine(
   if (added.length !== 1 || added[0] !== id) {
     throw new Error(
       added.length === 0
-        ? `Skript auf Platz ${id} geschrieben, taucht aber nicht in der Liste auf`
-        : `Skript sollte auf Platz ${id} landen, neu in der Liste: ${added.join(", ")}`,
+        ? L(`Skript auf Platz ${id} geschrieben, taucht aber nicht in der Liste auf`, `Script written to slot ${id}, but it does not show up in the list`)
+        : L(`Skript sollte auf Platz ${id} landen, neu in der Liste: ${added.join(", ")}`, `Script should have landed in slot ${id}, new in the list: ${added.join(", ")}`),
     );
   }
   const script = await syncSingleScript(id, client, repo);

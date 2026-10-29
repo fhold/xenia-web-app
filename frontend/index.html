@@ -70,6 +70,18 @@
       input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
       input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 
+      /* Dashboard am Handy quer: zu wenig Hoehe, als dass der Chart nur den Rest
+         bekommen koennte. Dann scrollt die Seite und der Chart fuellt die
+         sichtbare Hoehe unter Temperaturen und Favoriten (Dashboard.tsx). */
+      @media (orientation: landscape) and (max-height: 499px) {
+        .dash-root { height: auto !important; min-height: 100%; }
+        .dash-chart { flex: 0 0 auto !important; height: max(220px, calc(100dvh - 180px)); }
+      }
+      /* Handy hoch: steht ein Stufenziel in der Kopfzeile, fällt der Profilname weg. */
+      @media (orientation: portrait) and (max-width: 499px) {
+        .chart-title-name { display: none; }
+      }
+
       body {
         background-color: var(--bg);
         color: var(--txt);

@@ -9,6 +9,7 @@
  */
 
 import type { LiveFrame } from "../../../shared/src/types.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 /** Five idle poll ticks (polling_idle_ms defaults to 1000). */
 export const FRAME_MAX_AGE_MS = 5_000;
@@ -48,7 +49,7 @@ export function checkMachineReadyToStart(frame: LiveFrame | null): StartGate {
     return {
       ok: false,
       error:
-        "Maschinenzustand unbekannt — kein aktueller Status von der Maschine. Bitte Verbindung prüfen.",
+        L("Maschinenzustand unbekannt — kein aktueller Status von der Maschine. Bitte Verbindung prüfen.", "Machine state unknown — no current status from the machine. Please check the connection."),
     };
   }
   switch (frame.machineStatus) {
@@ -56,11 +57,11 @@ export function checkMachineReadyToStart(frame: LiveFrame | null): StartGate {
     case 2: // eco
       return { ok: true };
     case 0:
-      return { ok: false, error: "Maschine ist aus — bitte zuerst einschalten." };
+      return { ok: false, error: L("Maschine ist aus — bitte zuerst einschalten.", "The machine is off — please switch it on first.") };
     default: // 3 brewing, 4 draining, 5 paddle
       return {
         ok: false,
-        error: "Maschine ist gerade im Betrieb (Bezug/Entleeren). Bitte zuerst beenden.",
+        error: L("Maschine ist gerade im Betrieb (Bezug/Entleeren). Bitte zuerst beenden.", "The machine is busy (brewing/draining). Please finish that first."),
       };
   }
 }

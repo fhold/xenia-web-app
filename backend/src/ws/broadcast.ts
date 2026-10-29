@@ -49,7 +49,8 @@ export class WsHub {
   // the replay a reload mid-brew left the client with no way to stop the shot.
   private activeShot: Shot | null = null;
   /** Die aktuelle Stufe eines App-Bezugs — fuer Clients, die mitten im Bezug neu verbinden. */
-  private driveStage: DriveStage | null = null;
+  /** Stufen des laufenden App-Bezugs bisher (Stufe 0 beginnt die Liste). */
+  private driveStages: DriveStage[] = [];
 
   /** Logger bound to tag "ws" (Spec §4.13). Lifecycle-only — no per-frame logs.
    *  WS logs carry no shot_id; correlate to a shot by timestamp. */
@@ -152,7 +153,8 @@ export class WsHub {
     // button hang off activeShot in the client.
     if (this.activeShot !== null) {
       send(client, { type: "shotStarted", data: this.activeShot });
-      if (this.driveStage !== null) send(client, { type: "driveStage", data: this.driveStage });
+      // Alle bisherigen Stufen, damit Soll-Kurve und Restzeit nach dem Neuladen stimmen.
+      for (const stage of this.driveStages) send(client, { type: "driveStage", data: stage });
     }
   }
 
@@ -255,7 +257,7 @@ export class WsHub {
    *  Clears the retained shot unconditionally: whatever ends, nothing is running. */
   broadcastShotEnded(shot: Shot, samplesCount: number): void {
     this.activeShot = null;
-    this.driveStage = null;
+    this.driveStages = [];
     this.broadcast({ type: "shotEnded", data: shot, samplesCount });
   }
 
@@ -283,7 +285,7 @@ export class WsHub {
    *  every other connected client (e.g. the tablet at the machine) refetches
    *  instead of waiting for a manual tab focus. Payload-less — clients re-GET. */
   broadcastDriveStage(stage: DriveStage): void {
-    this.driveStage = stage;
+    this.driveStages = stage.index === 0 ? [stage] : [...this.driveStages, stage];
     this.broadcast({ type: "driveStage", data: stage });
   }
 

@@ -56,7 +56,7 @@ const gagneShot = shot({ profile: gagne, basket: basket("single"), grind: 20, do
 shot({ profile: lever, basket: basket("double"), grind: 22, dose: 18, size: "double" });
 
 const app = Fastify({ logger: false });
-registerShotRoutes(app, {} as never, new SqliteShotRepo(), {} as never, new SqliteBeanRepo(), new SqliteProfileRepo(), {} as never, {} as never, () => {}, {} as never);
+registerShotRoutes(app, {} as never, new SqliteShotRepo(), {} as never, new SqliteBeanRepo(), new SqliteProfileRepo(), {} as never, () => {}, {} as never);
 const defaults = async (q: Record<string, number>) => {
   const res = await app.inject({ method: "GET", url: `/api/shots/preshot-defaults?${new URLSearchParams(Object.entries(q).map(([k, v]) => [k, String(v)]))}` });
   return res.json() as { grindSetting: number | null; doseG: number | null; grindSource: { stage: string; shotId: number; grindNote: string | null } | null };

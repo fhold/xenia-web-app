@@ -11,6 +11,11 @@
  * ausgleicht. Ueberschreibbar per Einstellung `pump_curve` (JSON), damit sie
  * sich nach einem Firmware-Update neu vermessen laesst.
  *
+ * Ueber 7 bar gilt die Gerade nicht mehr: dort foerdert die Pumpe weniger. Alle
+ * App-Bezuege mit ruhigen Abschnitten ueber 7 bar brauchten mehr Leistung, als
+ * die Gerade sagt (0,4–6,4 %, Median 1,8 %; #298 2,2 % bei 8,65 bar) — als
+ * Fehlmenge HIGH_PRESSURE_LOSS_MLS je bar ueber HIGH_PRESSURE_FROM_BAR.
+ *
  * Hier liegt auch die Preinfusion, die darauf aufbaut (PreinfusionStep).
  */
 
@@ -39,35 +44,22 @@ export function parsePumpCurve(raw: string | null | undefined): PumpCurve {
   return DEFAULT_PUMP_CURVE;
 }
 
-/** Darunter wuerde Q/(2p) in der Rampen-Vorsteuerung explodieren. */
-const RAMP_FF_MIN_BAR = 2;
-/** Obergrenze der Steigung (%/bar) — Schutz gegen einen ausreissenden Fluss-Messwert. */
-const RAMP_FF_MAX_SLOPE = 10;
-
-/**
- * Vorsteuerung einer Druckrampe: um wie viel % sich die Pumpenleistung aendert, wenn
- * der Solldruck um `deltaBar` wandert — die Steigung der Kennlinie entlang der
- * Puck-Kennlinie Q = k·√p: dP/dp = perBar + perMlS · Q/(2p), Q = aktueller Tassenfluss.
- * So macht es die Firmware im Skript (#250, #264). Gegenprobe #285: bei 7 bar und
- * 1,5 g/s 4,3 %/bar, Rampe −0,32 bar/s → −1,4 %/s; der PI allein brauchte dafuer
- * dauerhaft ~0,8 bar Abweichung (1,6 %/s / ki 2).
- */
-export function pressureRampFeedForward(curve: PumpCurve, deltaBar: number, pressureBar: number, flowGs: number): number {
-  const p = Math.max(RAMP_FF_MIN_BAR, pressureBar);
-  const slope = Math.min(RAMP_FF_MAX_SLOPE, curve.perBar + (curve.perMlS * Math.max(0, flowGs)) / (2 * p));
-  return slope * deltaBar;
-}
-
 /** Pumpenleistung (%), die bei diesem Druck den gewuenschten Zulauf (ml/s) liefert. */
+/** Ab diesem Druck foerdert die Pumpe weniger als die Gerade … */
+export const HIGH_PRESSURE_FROM_BAR = 7;
+/** … um so viel ml/s je bar darueber. */
+export const HIGH_PRESSURE_LOSS_MLS = 0.1;
+
 export function powerForInflow(curve: PumpCurve, pressureBar: number, inflowMlS: number): number {
-  return curve.offset + curve.perBar * Math.max(0, pressureBar) + curve.perMlS * inflowMlS;
+  const loss = HIGH_PRESSURE_LOSS_MLS * Math.max(0, pressureBar - HIGH_PRESSURE_FROM_BAR);
+  return curve.offset + curve.perBar * Math.max(0, pressureBar) + curve.perMlS * (inflowMlS + loss);
 }
 
 /** Fuellen: so schnell wie die bisherigen 45 % (bei 0 bar ≈ 3,7 ml/s). */
 export const PREINFUSION_FILL_MLS = 3.5;
-/** Ab diesem Gegendruck saettigt die Preinfusion sanfter. */
+/** Ab diesem Gegendruck saettigt die Preinfusion sanfter — mit "none" nicht. */
 export const PREINFUSION_SATURATE_FROM_BAR = 1;
-export const PREINFUSION_SATURATE_MLS: Record<PreinfusionGentleness, number> = {
+export const PREINFUSION_SATURATE_MLS: Record<Exclude<PreinfusionGentleness, "none">, number> = {
   gentle: 1.5,
   normal: 2.0,
   brisk: 2.5,
@@ -91,11 +83,12 @@ export function preinfusionPower(
   softStartMs: number = PREINFUSION_SOFT_START_MS,
   fill: PreinfusionFill | undefined = undefined,
 ): number {
-  const saturating = pressureBar >= PREINFUSION_SATURATE_FROM_BAR;
+  const soak = gentleness === "none" ? null : PREINFUSION_SATURATE_MLS[gentleness ?? "normal"];
+  const saturating = soak !== null && pressureBar >= PREINFUSION_SATURATE_FROM_BAR;
   const fast = !saturating && fill === "fast";
   const want = fast
     ? PREINFUSION_FAST_FILL_POWER
-    : powerForInflow(curve, pressureBar, saturating ? PREINFUSION_SATURATE_MLS[gentleness ?? "normal"] : PREINFUSION_FILL_MLS);
+    : powerForInflow(curve, pressureBar, saturating ? soak : PREINFUSION_FILL_MLS);
   const cap = fast ? PREINFUSION_FAST_FILL_POWER : PREINFUSION_POWER_CAP;
   const softCap = softStartMs > 0 ? cap * Math.min(1, Math.max(0, inStageMs) / softStartMs) : cap;
   return Math.min(want, softCap);

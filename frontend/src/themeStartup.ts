@@ -1,13 +1,14 @@
 /**
  * Farbschema beim Start setzen — bevor die übrigen Module laden (main.tsx),
- * denn mehrere lesen ihre Farben beim Laden. Die Wahl liegt im Backend
- * (`ui_theme`, `ui_color_schemes`) und als Kopie im Browser, damit die erste
- * Darstellung schon stimmt. Weicht der Server ab (anderes Gerät hat
- * umgestellt), wird einmal neu geladen.
+ * denn mehrere lesen ihre Farben beim Laden. Die Darstellung wählt jedes Gerät
+ * selbst (nur im Browser; Handy hell, Tablet dunkel); die eigenen Farbschemata
+ * liegen im Backend (`ui_color_schemes`) und gelten auf allen Geräten — der
+ * Browser hält eine Kopie, damit die erste Darstellung schon stimmt. Weichen die
+ * Schemata des Servers ab, wird einmal neu geladen.
  */
 
 import { applyTheme, buildTheme } from "./theme.js";
-import { parseColorSchemes, UI_THEME_PATTERN } from "@shared/color-scheme.js";
+import { parseColorSchemes } from "@shared/color-scheme.js";
 import type { ColorScheme, SchemeBase } from "@shared/color-scheme.js";
 
 const KEY = "xenia_theme";
@@ -38,8 +39,13 @@ function readCache(): ThemeChoice {
       const c = JSON.parse(raw) as ThemeChoice;
       if (typeof c.ui === "string" && Array.isArray(c.schemes)) return c;
     }
-  } catch { /* privates Fenster o. Ä. — dann dunkel */ }
-  return { ui: "dark", schemes: [] };
+  } catch { /* privates Fenster o. Ä. — dann wie das System */ }
+  return { ui: "system", schemes: [] };
+}
+
+/** Die Wahl dieses Geräts (für die Einstellungen). */
+export function deviceThemeChoice(): ThemeChoice {
+  return readCache();
 }
 
 /** Beim Start, vor dem Laden der App. */
@@ -59,12 +65,13 @@ export function useThemeChoice(choice: ThemeChoice): void {
   location.reload();
 }
 
-/** Nach dem Start mit dem Server abgleichen; weicht er ab, einmal neu laden. */
+/** Nach dem Start die Farbschemata mit dem Server abgleichen; weichen sie ab, einmal
+ *  neu laden. Die Darstellung selbst bleibt die dieses Geräts. */
 export async function syncThemeFromServer(): Promise<void> {
   try {
     const data = (await fetch("/api/settings").then((r) => r.json())) as Record<string, string | undefined>;
-    const ui = data["ui_theme"] && UI_THEME_PATTERN.test(data["ui_theme"]) ? data["ui_theme"] : "dark";
-    const server: ThemeChoice = { ui, schemes: parseColorSchemes(data["ui_color_schemes"]) };
-    if (JSON.stringify(server) !== JSON.stringify(readCache())) useThemeChoice(server);
+    const local = readCache();
+    const schemes = parseColorSchemes(data["ui_color_schemes"]);
+    if (JSON.stringify(schemes) !== JSON.stringify(local.schemes)) useThemeChoice({ ui: local.ui, schemes });
   } catch { /* offline: die Kopie gilt */ }
 }

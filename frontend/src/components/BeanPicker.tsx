@@ -15,6 +15,7 @@
  * a free flag (§3g); only INACTIVE roastings disappear from the picker.
  */
 
+import { useEffect, useState } from "react";
 import type { Bean } from "@shared/types.js";
 import { useTranslation } from "../i18n/index.js";
 import { formatRoastDate } from "../lib/dates.js";
@@ -95,5 +96,51 @@ export function BeanPicker({ beans, value, onChange, style, disabled, id }: Bean
         );
       })}
     </select>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fremdbohne: Freitext mit Vorschlaegen — Pre-Brew und Shot-Edit nutzen ihn
+// ---------------------------------------------------------------------------
+
+interface BeanLabelInputProps {
+  value: string;
+  onChange: (label: string) => void;
+  style?: React.CSSProperties;
+  /** id der datalist — je Dialog eindeutig. */
+  listId: string;
+}
+
+/** Bohnen, die hier bewusst nicht gepflegt werden. Freitext mit Vorschlaegen aus
+ *  dem, was schon benutzt wurde — das native datalist rendert dank
+ *  color-scheme: dark dunkel. */
+export function BeanLabelInput({ value, onChange, style, listId }: BeanLabelInputProps) {
+  const { t } = useTranslation();
+  const [hints, setHints] = useState<{ label: string; count: number }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/shots/bean-labels")
+      .then((r) => (r.ok ? (r.json() as Promise<{ label: string; count: number }[]>) : []))
+      .then((v) => { if (!cancelled) setHints(v); })
+      .catch(() => { /* Vorschlaege sind Komfort, kein Muss */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <>
+      <input
+        type="text"
+        list={listId}
+        value={value}
+        onChange={(e) => { onChange(e.target.value); }}
+        placeholder={t("preshot.beanLabelPlaceholder")}
+        style={style}
+      />
+      <datalist id={listId}>
+        {hints.map((h) => (
+          <option key={h.label} value={h.label}>{`${h.count}×`}</option>
+        ))}
+      </datalist>
+    </>
   );
 }

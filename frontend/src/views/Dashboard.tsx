@@ -21,9 +21,12 @@ import { useShotGhosts } from "../hooks/useShotGhosts.js";
 import { RecentShots } from "../components/RecentShots.js";
 import type { ChartMode } from "../components/ShotChart.js";
 import type { ConnectionState } from "../hooks/useXeniaFrame.js";
-import type { ChartSample } from "../hooks/useShotSamples.js";
+import type { ChartSample, EndedShotStages } from "../hooks/useShotSamples.js";
 import type { ChartXSettings } from "../hooks/useChartSettings.js";
 import { canStartShotFromState } from "../lib/shotReadiness.js";
+import { dec } from "../lib/num.js";
+import { liveSollCurve, liveStageEntries, recordedStageEntries } from "@shared/live-stage.js";
+import { preinfusionArrivalGs } from "@shared/pump-curve.js";
 import type {
   DriveStage,
   LiveFrame,
@@ -92,6 +95,10 @@ interface DashboardProps {
   profiles?: Profile[];
   /** Aktuelle Stufe eines laufenden App-Bezugs (null bei Skript-Bezuegen). */
   driveStage?: DriveStage | null;
+  /** Alle Stufen des laufenden bzw. zuletzt gelaufenen App-Bezugs (Soll-Kurve, Ziel). */
+  driveStages?: DriveStage[];
+  /** Gespeicherte Stufen des zuletzt beendeten Bezugs (Soll-Kurve nach dem Bezug). */
+  endedStages?: EndedShotStages | null;
   /** ÄW-B: app-initiated maintenance run in progress (backflush etc.). When set,
    *  the chart area shows a "maintenance running" banner + countdown instead. */
   maintenance?: MaintenanceRun | null;
@@ -144,6 +151,8 @@ export function Dashboard({
   restoredShot = false,
   profiles = [],
   driveStage = null,
+  driveStages = [],
+  endedStages = null,
   maintenance = null,
   maintenanceDone = null,
   onMaintenanceDoneAck,
@@ -214,6 +223,38 @@ export function Dashboard({
   const chartStage = activeShot !== null && activeShot.scriptId === null && driveStage !== null
     ? (driveStage.name ?? stageKindLabel[driveStage.kind]) : null;
 
+  // App-Bezug: die Stufen auf der Zeitachse des gezeigten Bezugs. Läuft er, kommen
+  // sie vom Treiber (Eintritt + Sollwert, nach dem Neuladen vom Server nachgespielt;
+  // Stufe 0 kommt kurz vor dem Bezugsbeginn — gehört die Liste zu einem anderen
+  // Bezug, nichts). Ist er beendet, aus der DB wie in der Historie, auch nach dem
+  // Neuladen; die letzte Stufe endet dann mit dem Pumpenstopp, nicht mit dem Nachlauf.
+  const lastSampleT = samples.length > 0 ? samples[samples.length - 1]!.t : 0;
+  const ended = activeShot === null && endedStages !== null && endedStages.shotId === displayShot?.id ? endedStages : null;
+  const stageEntries = useMemo(() => {
+    if (!displayShot || displayShot.scriptId !== null) return null;
+    if (ended) return recordedStageEntries(ended.stages, ended.steps, samples);
+    if (driveStages.length === 0 || Math.abs(driveStages[0]!.enteredAt - displayShot.startedAt) > 10_000) return null;
+    return liveStageEntries(driveStages, displayShot.startedAt);
+  }, [displayShot, driveStages, ended, samples]);
+  const stagesEndT = ended ? ended.brewEndS : lastSampleT;
+
+  // Stufen der Variante, mit der der angezeigte App-Bezug läuft („wie X“ folgt X) — für die Ausstiege.
+  const appSteps = useMemo(() => {
+    if (!displayShot || displayShot.scriptId !== null) return null;
+    const p = profiles.find((x) => x.id === displayShot.profileId);
+    const v = p?.variants?.find((x) => x.id === displayShot.variantId);
+    const src = v?.sameAsId != null ? p?.variants?.find((x) => x.id === v.sameAsId) : v;
+    return src?.brewSteps?.steps ?? null;
+  }, [displayShot, profiles]);
+
+  // Soll-Kurve der gelaufenen Druck-/Flussstufen (Schalter „Soll-Kurve im Live-Diagramm“).
+  const liveOverlay = useMemo(() => {
+    if (!xSettings?.liveSoll || !stageEntries) return null;
+    const s = liveSollCurve(stageEntries, stagesEndT);
+    if (s.bar.length === 0 && s.flow.length === 0) return null;
+    return { barSolid: s.bar, barHeld: [], flowSolid: s.flow, flowHeld: [], markers: [], endT: 0 };
+  }, [xSettings?.liveSoll, stageEntries, stagesEndT]);
+
   const bg = frame?.brewGroupTempC ?? 0;
   const bb = frame?.brewBoilerTempC ?? 0;
   const sb = frame?.steamBoilerPressureBar ?? 0;
@@ -279,6 +320,36 @@ export function Dashboard({
 
   // Yield target: Cmd27 takes precedence over profile target
   const yieldTarget = displayShot?.cmd27Value ?? displayShot?.yieldTargetG ?? null;
+
+  // Was die laufende Stufe tun soll: Ziel (Rampe ab Eintritt, „vom Puck“) und Ende.
+  const chartGoal = (() => {
+    if (!isBrewing || !driveStage || !stageEntries || !appSteps) return null;
+    const step = appSteps[driveStage.index];
+    const entry = stageEntries[stageEntries.length - 1];
+    if (!step || !entry || driveStages[driveStages.length - 1]!.index !== driveStage.index) return null;
+    const sp = driveStage.setpoint;
+    const unit = driveStage.kind === "pressure" ? "bar" : driveStage.kind === "flow" ? "g/s" : "%";
+    const num = (v: number) => dec(v.toFixed(unit === "%" ? 0 : 1));
+    const parts: string[] = [];
+    if (step.kind === "preinfusion") parts.push(t(step.fill === "fast" ? "ui.dashboard.goal.fillFast" : "ui.dashboard.goal.fill"));
+    else if (sp) {
+      if (sp.adopted) parts.push(t("ui.dashboard.goal.adopted", { to: num(sp.to), unit }));
+      else if (sp.rampMs > 0) parts.push(t("ui.dashboard.goal.ramp", { from: num(sp.from), to: num(sp.to), unit, s: Math.round(sp.rampMs / 1000) }));
+      else parts.push(t("ui.dashboard.goal.hold", { to: num(sp.to), unit }));
+    }
+    const ex = step.exit;
+    const ends: string[] = [];
+    if (ex.seconds !== undefined) ends.push(t("ui.dashboard.goal.left", { s: Math.max(0, Math.ceil(ex.seconds - (lastSampleT - entry.t))) }));
+    if (ex.weightG !== undefined) ends.push(t("ui.dashboard.goal.atWeight", { v: dec(String(ex.weightG)) }));
+    if (ex.pressureBar !== undefined) ends.push(t("ui.dashboard.goal.atPressure", { v: dec(String(ex.pressureBar)) }));
+    if (ex.pressureBelowBar !== undefined) ends.push(t("ui.dashboard.goal.belowPressure", { v: dec(String(ex.pressureBelowBar)) }));
+    if (ex.flowGs !== undefined) ends.push(t("ui.dashboard.goal.belowFlow", { v: dec(String(ex.flowGs)) }));
+    if (ex.flowAboveGs !== undefined) ends.push(t("ui.dashboard.goal.aboveFlow", { v: dec(String(ex.flowAboveGs)) }));
+    if (step.kind === "preinfusion" && preinfusionArrivalGs(appSteps[driveStage.index + 1]) !== null) ends.unshift(t("ui.dashboard.goal.arrived"));
+    if (ends.length === 0 && driveStage.index === appSteps.length - 1 && yieldTarget !== null) ends.push(t("ui.dashboard.goal.atWeight", { v: dec(yieldTarget.toFixed(0)) }));
+    if (ends.length) parts.push(ends.join(" / "));
+    return parts.length ? parts.join(" · ") : null;
+  })();
 
   // Post-shot comparison: once the shot is finished, draw the past shots of the
   // same brew behind it. Not while brewing — the ghosts would have to slide
@@ -376,7 +447,7 @@ export function Dashboard({
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="dash-root" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {/* Water-tank-low banner (idle only): persistent until refilled. */}
       {waterTankEmpty && (
         <div
@@ -547,10 +618,11 @@ export function Dashboard({
         </div>
       </div>
 
-      {/* ---- Chart — fills the available vertical space (flex) on all breakpoints.
+      {/* ---- Chart — fills the available vertical space (flex); handy quer eine
+              feste Hoehe und die Seite scrollt (.dash-chart in index.html).
               ÄW-B: while a maintenance run is active the chart area is replaced by
               a "maintenance running" banner + countdown (no shot is recorded). ---- */}
-      <div style={{ marginBottom: 12, flex: "1 1 0", minHeight: 0, position: "relative" }}>
+      <div className="dash-chart" style={{ marginBottom: 12, flex: "1 1 0", minHeight: 0, position: "relative" }}>
         {maintenance ? (
           <div
             style={{
@@ -633,6 +705,8 @@ export function Dashboard({
           endedBadge={!restoredShot}
           title={chartTitle}
           titleTail={chartTitle ? chartStage : null}
+          titleGoal={chartTitle && chartStage ? chartGoal : null}
+          overlay={liveOverlay}
           topInset={mobile && chartMode !== "idle" ? MOBILE_READOUT_INSET : 0}
         />
 

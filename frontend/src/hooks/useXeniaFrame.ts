@@ -44,6 +44,9 @@ export interface XeniaState {
   profilesRev: number;
   /** Aktuelle Stufe des laufenden App-Bezugs (driveStage WS-Event); null nach dem Bezug. */
   driveStage: DriveStage | null;
+  /** Alle Stufen des laufenden bzw. zuletzt gelaufenen App-Bezugs (Stufe 0 beginnt
+   *  die Liste); der Server spielt sie beim Verbinden mitten im Bezug nach. */
+  driveStages: DriveStage[];
 }
 
 // Reconnect backoff: 1s → 2s → 4s → ... → 30s max
@@ -73,6 +76,7 @@ export function useXeniaFrame(): XeniaState {
   const maintenanceRef = useRef<MaintenanceRun | null>(null);
   const [profilesRev, setProfilesRev] = useState(0);
   const [driveStage, setDriveStage] = useState<DriveStage | null>(null);
+  const [driveStages, setDriveStages] = useState<DriveStage[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(BACKOFF_BASE_MS);
@@ -142,9 +146,14 @@ export function useXeniaFrame(): XeniaState {
           case "profilesChanged":
             setProfilesRev((n) => n + 1);
             break;
-          case "driveStage":
-            setDriveStage(msg.data);
+          case "driveStage": {
+            const stage = msg.data;
+            // Nachgespielte Stufen (neu verbunden) sind älter als die laufende — die
+            // aktuelle Stufe nur vorwärts, sonst klingt der Stufenton erneut.
+            setDriveStage((prev) => (prev === null || stage.enteredAt > prev.enteredAt ? stage : prev));
+            setDriveStages((prev) => (stage.index === 0 ? [stage] : [...prev.filter((s) => s.index !== stage.index), stage]));
             break;
+          }
           case "machineInfo":
           case "error":
             break;
@@ -184,5 +193,5 @@ export function useXeniaFrame(): XeniaState {
 
   const dismissMaintenanceDone = useCallback(() => { setMaintenanceDone(null); }, []);
 
-  return { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev, driveStage };
+  return { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev, driveStage, driveStages };
 }

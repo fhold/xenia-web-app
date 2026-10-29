@@ -1,10 +1,8 @@
 /**
- * Bezuege vergleichen: Vorschlaege fuer den zweiten Bezug (Flavio 2026-10-20).
- *  - Referenz ★ derselben Sorte, ausser der Bezug ist es selbst.
- *  - Vorheriger Bezug derselben Sorte (dieselbe Regel wie in der Bewertung);
- *    ist er zugleich die Referenz, steht er nur einmal da.
- *  - Beide als vollstaendige Historienzeilen, damit der Vergleich ohne
- *    weiteren Abruf oeffnen kann.
+ * Bezuege vergleichen: Vorschlag fuer den zweiten Bezug (Flavio 2026-10-20).
+ *  - Vorheriger Bezug derselben Sorte (dieselbe Regel wie in der Bewertung).
+ *  - Als vollstaendige Historienzeile, damit der Vergleich ohne weiteren
+ *    Abruf oeffnen kann.
  *
  * Runner: node:test via tsx — Wegwerf-DB, echte Repos, Routen ueber inject().
  */
@@ -51,42 +49,31 @@ const shot = (beanId: number | null, grind = 20) =>
     `INSERT INTO shot (profile_id, shot_size, category, started_at, ended_at, bean_id, grind_setting)
      VALUES (?, 'single', 'brew', ?, ?, ?, ?)`,
   ).run(gagne, (t += 60_000), t + 40_000, beanId, grind));
-const flagBest = (coffeeId: number, shotId: number) =>
-  db.prepare("INSERT OR REPLACE INTO best_brew (coffee_id, shot_id, created_at) VALUES (?, ?, ?)").run(coffeeId, shotId, now);
-
-const ref = shot(darkBean, 19);
+const first = shot(darkBean, 19);
 const mid = shot(darkBean, 18.5);
 const last = shot(darkBean, 18);
 const jamOnly = shot(jamBean);
 const noBean = shot(null);
-flagBest(dark, ref);
 
 const shots = new SqliteShotRepo();
 const app = Fastify({ logger: false });
-registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), new SqliteProfileRepo(), {} as never, {} as never, () => {}, {} as never, new SqliteSettingsRepo());
-type Sugg = { reference: { id: number; grindSetting: number; profileName: string; isBestBrew: boolean } | null; previous: { id: number; grindSetting: number } | null };
+registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), new SqliteProfileRepo(), {} as never, () => {}, {} as never, new SqliteSettingsRepo());
+type Sugg = { previous: { id: number; grindSetting: number; profileName: string } | null };
 const suggest = async (shotId: number) => (await app.inject({ method: "GET", url: `/api/shots/${shotId}/compare-suggestions` })).json() as Sugg;
 
-test("Referenz und Vorgänger derselben Sorte, als Historienzeilen", async () => {
+test("Vorgänger derselben Sorte, als Historienzeile", async () => {
   const s = await suggest(last);
-  assert.deepEqual([s.reference?.id, s.reference?.grindSetting, s.reference?.profileName, s.reference?.isBestBrew], [ref, 19, "Adaptive Gagné · 9 bar", true]);
-  assert.deepEqual([s.previous?.id, s.previous?.grindSetting], [mid, 18.5]);
+  assert.deepEqual([s.previous?.id, s.previous?.grindSetting, s.previous?.profileName], [mid, 18.5, "Adaptive Gagné · 9 bar"]);
+  assert.equal((await suggest(mid)).previous?.id, first);
 });
 
-test("Vorgänger ist zugleich die Referenz → nur einmal", async () => {
-  const s = await suggest(mid);
-  assert.equal(s.reference?.id, ref);
-  assert.equal(s.previous, null);
-});
-
-test("Die Referenz selbst bekommt sich nicht vorgeschlagen", async () => {
-  const s = await suggest(ref);
-  assert.deepEqual([s.reference, s.previous], [null, null], "ältester Bezug der Sorte, keine andere Referenz");
+test("Ältester Bezug der Sorte: kein Vorschlag", async () => {
+  assert.deepEqual(await suggest(first), { previous: null });
 });
 
 test("Andere Sorte und ohne Sorte: nichts", async () => {
-  assert.deepEqual(Object.values(await suggest(jamOnly)), [null, null]);
-  assert.deepEqual(Object.values(await suggest(noBean)), [null, null]);
+  assert.deepEqual(await suggest(jamOnly), { previous: null });
+  assert.deepEqual(await suggest(noBean), { previous: null });
 });
 
 test("Unbekannter Bezug → 404", async () => {
@@ -95,5 +82,5 @@ test("Unbekannter Bezug → 404", async () => {
 
 test("Liste nach ids: leere Liste liefert nichts", () => {
   assert.equal(shots.listShotsFiltered({ ids: [], limit: 5, offset: 0, sort: "date_desc", category: "all" }).shots.length, 0);
-  assert.deepEqual(shots.listShotsFiltered({ ids: [last, ref], limit: 5, offset: 0, sort: "date_desc", category: "all" }).shots.map((s) => s.id), [last, ref]);
+  assert.deepEqual(shots.listShotsFiltered({ ids: [last, first], limit: 5, offset: 0, sort: "date_desc", category: "all" }).shots.map((s) => s.id), [last, first]);
 });

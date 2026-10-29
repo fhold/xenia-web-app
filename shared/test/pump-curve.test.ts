@@ -13,7 +13,7 @@ import {
   preinfusionArrivalGs,
   PREINFUSION_POWER_CAP,
   PREINFUSION_FAST_FILL_POWER,
-  pressureRampFeedForward,
+  PREINFUSION_FILL_MLS,
 } from "../src/pump-curve.js";
 
 const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
@@ -23,6 +23,13 @@ test("Kennlinie: Leistung fuer Zulauf und Druck (P = 3,26·p + 9,5·Q + 9,4)", (
   near(powerForInflow(DEFAULT_PUMP_CURVE, 2, 2), 34.92);
   // negativer Druck (Sensorrauschen) zaehlt als 0
   near(powerForInflow(DEFAULT_PUMP_CURVE, -0.1, 1), 18.9);
+});
+
+test("Kennlinie ueber 7 bar: die Pumpe foerdert je bar darueber 0,1 ml/s weniger", () => {
+  // bis 7 bar die Gerade
+  near(powerForInflow(DEFAULT_PUMP_CURVE, 7, 2), 9.4 + 3.26 * 7 + 9.5 * 2);
+  // bei 9 bar fehlen 0,2 ml/s → +1,9 % Leistung (#298 brauchte +2,2 % bei 8,65 bar)
+  near(powerForInflow(DEFAULT_PUMP_CURVE, 9, 2) - (9.4 + 3.26 * 9 + 9.5 * 2), 1.9);
 });
 
 test("Preinfusion: fuellt bis 1 bar mit 3,5 ml/s, danach saettigt sie je nach Sanftheit", () => {
@@ -52,15 +59,12 @@ test("Preinfusion schnell fuellen: volle Pumpe bis 1 bar, danach saettigt sie wi
   near(preinfusionPower(c, "normal", 0.5, 5000, undefined, "normal"), preinfusionPower(c, "normal", 0.5, 5000));
 });
 
-test("Vorsteuerung einer Druckrampe: Steigung der Kennlinie entlang des Pucks", () => {
+test("Preinfusion ohne Bremse (none): fuellt bis zum Ausstieg weiter — schnell mit voller Pumpe, sonst mit 3,5 ml/s", () => {
   const c = DEFAULT_PUMP_CURVE;
-  // #285: 7 bar, 1,5 g/s → 3,26 + 9,5·1,5/14 ≈ 4,28 %/bar; ein Takt −0,12 bar → ≈ −0,51 %
-  near(pressureRampFeedForward(c, -0.12, 7, 1.5), -0.12 * (3.26 + (9.5 * 1.5) / 14));
-  // unter 2 bar rechnet sie mit 2 bar, ohne Fluss nur mit der Kennlinie
-  near(pressureRampFeedForward(c, -1, 0.5, 1), -(3.26 + 9.5 / 4));
-  near(pressureRampFeedForward(c, -1, 5, 0), -3.26);
-  // ausreissender Fluss: Steigung hoechstens 10 %/bar
-  near(pressureRampFeedForward(c, -1, 2, 50), -10);
+  near(preinfusionPower(c, "none", 3.8, 10000, undefined, "fast"), PREINFUSION_FAST_FILL_POWER);
+  near(preinfusionPower(c, "none", 2, 5000), powerForInflow(c, 2, PREINFUSION_FILL_MLS));
+  // die Obergrenze 60 % gilt weiter, nur das schnelle Fuellen geht darueber
+  near(preinfusionPower(c, "none", 12, 10000), PREINFUSION_POWER_CAP);
 });
 
 test("Preinfusion endet, wenn 90 % des Startflusses der naechsten Flussstufe ankommen", () => {

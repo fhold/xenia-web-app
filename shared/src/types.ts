@@ -165,6 +165,12 @@ export interface DriveStage {
   name: string | null;
   /** Am Ende der Stufe einen Ton spielen (BrewStep.tone). */
   tone: boolean;
+  /** Eintritt, Wanduhr in ms wie `Shot.startedAt` (Stufe 0 liegt kurz davor). */
+  enteredAt: number;
+  /** Womit der Treiber die Stufe fährt (Druck bar, Fluss g/s, Leistung %): Rampe
+   *  von `from` nach `to` über `rampMs`; `adopted` = Ziel vom Puck übernommen.
+   *  null bei der Preinfusion — sie ist keine Reglerstufe. */
+  setpoint: { from: number; to: number; rampMs: number; adopted: boolean } | null;
 }
 
 /** ÄW-B: an app-initiated maintenance run in progress (e.g. a backflush script).
@@ -556,8 +562,9 @@ export interface PowerStep {
   exit: StepExit;
 }
 
-/** Wie zuegig die Preinfusion den Puck saettigt, sobald er Gegendruck aufbaut. */
-export type PreinfusionGentleness = "gentle" | "normal" | "brisk";
+/** Wie zuegig die Preinfusion den Puck saettigt, sobald er Gegendruck aufbaut;
+ *  "none" bremst nicht und fuellt bis zum Ausstieg weiter (wie die Decent). */
+export type PreinfusionGentleness = "gentle" | "normal" | "brisk" | "none";
 
 /** Wie schnell die Preinfusion den leeren Raum ueber dem Kaffee fuellt, bis der
  *  erste Gegendruck kommt: "normal" mit 3,5 ml/s, "fast" mit voller Pumpe. */
@@ -745,31 +752,6 @@ export interface Coffee {
   shotCount?: number;
   /** Derived (API only): unix ms of the newest brew shot; null = nie bezogen. */
   lastShotAt?: number | null;
-  /** BB-a: live-joined best-brew reference for this Sorte, or null if none. */
-  bestBrew?: BestBrewSummary | null;
-}
-
-/**
- * BB-a — live-joined summary of a Sorte's best-brew reference. A pure pointer
- * into the shot: the values are aggregated from the referenced shot's samples
- * (peak/avg over non-post_brew frames, brew time = last non-post_brew sample),
- * so deleting the shot removes the reference. null values mean the source shot
- * lacked the data (e.g. no dose → no ratio).
- */
-export interface BestBrewSummary {
-  shotId: number;
-  /** Brew time in seconds (last non-post_brew sample). */
-  brewTimeS: number | null;
-  /** yield_actual_g / dose_g. */
-  ratio: number | null;
-  /** Peak pressure over non-post_brew frames (bar). */
-  peakPressureBar: number | null;
-  /** Mean brew-group temp over non-post_brew frames (°C). */
-  avgTempC: number | null;
-  /** Profile name snapshot (live profile name, else the shot's snapshot). */
-  profileName: string | null;
-  /** Unix ms the reference was flagged. */
-  createdAt: number;
 }
 
 export interface CoffeeCreate {
@@ -1071,9 +1053,7 @@ export interface ShotCompare {
 
 /** GET /api/shots/:id/compare-suggestions — Vorschlaege fuer „Bezuege vergleichen“. */
 export interface CompareSuggestions {
-  /** Referenz ★ derselben Sorte, sofern es nicht dieser Bezug selbst ist. */
-  reference: ShotListItem | null;
-  /** Letzter beendeter Bezug derselben Sorte davor; null, wenn er die Referenz ist. */
+  /** Letzter beendeter Bezug derselben Sorte davor. */
   previous: ShotListItem | null;
 }
 
@@ -1243,8 +1223,6 @@ export interface Sample {
 export interface ShotDetail {
   shot: Shot;
   samples: Sample[];
-  /** BB-a: true if this shot is its Sorte's best-brew reference. */
-  isBestBrew: boolean;
   /** Flow-Hold stages this shot actually ran (empty for script/execute shots). */
   stages: ShotStage[];
   /** Snapshot of the BrewProfile steps in effect at brew time (null for
@@ -1354,8 +1332,6 @@ export interface ShotListItem {
   tdsPercent: number | null;
   /** H4: BG set temperature (°C) snapshot at brew time. null if not recorded. */
   profileSetTempC: number | null;
-  /** BB-a: true if this shot is its Sorte's best-brew reference. */
-  isBestBrew: boolean;
 }
 
 /** Sort options for the history list. */

@@ -35,7 +35,7 @@ test("Decent 80's Espresso auf Englisch: Zeilen, Notiz, Begruendung; Kurve wie a
   const r = en(() => translateDecent(file("80s_espresso.tcl")));
   assert.ok(r.ok);
   assert.deepEqual(r.rows.map((x) => [x.group, x.name, x.decent, x.xenia, x.status]), [
-    ["step", "preinfusion start + preinfusion", "Flow 7.5 ml/s until 3.8 bar · at most 8 s", "Preinfusion · until 3.8 bar · at most 25 s", "changed"],
+    ["step", "preinfusion start + preinfusion", "Flow 7.5 ml/s until 3.8 bar · at most 8 s", "Preinfusion · full pump ~5.6 ml/s, from 1 bar 2 ml/s · until 3.8 bar · at most 25 s", "changed"],
     ["step", "rise and hold", "Pressure 7.8 bar · 4 s", "Pressure 7.8 bar · Ramp 3 s · 4 s", "changed"],
     ["step", "decline", "Pressure smooth to 5 bar · 50 s", "Pressure smooth to 5 bar · until 36 g", "same"],
     ["profile", "Temperature", "82 → 80 → 72 °C", "80 °C (from “rise and hold”)", "changed"],

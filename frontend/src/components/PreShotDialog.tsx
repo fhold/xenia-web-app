@@ -15,7 +15,7 @@ import { Scale, X } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { usePreShotData } from "../hooks/usePreShotData.js";
 import { usePreShotFieldSettings } from "../hooks/usePreShotFieldSettings.js";
-import { BeanPicker, isPickableBean } from "./BeanPicker.js";
+import { BeanPicker, BeanLabelInput, isPickableBean } from "./BeanPicker.js";
 import { resolveColor } from "./Gauge.js";
 import type { GrindSource, Profile, ProfileVariant, ShotSize } from "@shared/types.js";
 import { startVariants, shotSizeForBasket } from "@shared/profile-slots.js";
@@ -241,19 +241,9 @@ export function PreShotDialog({
   // keine dritte Option im Picker — "Keine Bohne" gab es schon, das Textfeld
   // haengt sich darunter, wenn man sie waehlt.
   const [beanLabel, setBeanLabel] = useState("");
-  const [labelHints, setLabelHints] = useState<{ label: string; count: number }[]>([]);
   const selectedBean = beans.find((b) => b.id === beanId) ?? null;
   const selectedBeanDepleted = selectedBean?.stockDepleted ?? false;
 
-  useEffect(() => {
-    if (beanId !== null) return;
-    let cancelled = false;
-    fetch("/api/shots/bean-labels")
-      .then((r) => (r.ok ? (r.json() as Promise<{ label: string; count: number }[]>) : []))
-      .then((v) => { if (!cancelled) setLabelHints(v); })
-      .catch(() => { /* Vorschlaege sind Komfort, kein Muss */ });
-    return () => { cancelled = true; };
-  }, [beanId]);
   const [grinderId, setGrinderId] = useState<number | null>(null);
   const [grindSetting, setGrindSetting] = useState("");
   /** Woher der vorbelegte Mahlgrad kommt; null, sobald er von Hand geaendert ist. */
@@ -908,25 +898,14 @@ export function PreShotDialog({
                     : t("preshot.remainingNoBag").replace("{rest}", fmtG(selectedBean.remainingG))}
                 </div>
               )}
-              {/* Fremdbohne: Bohnen, die hier bewusst nicht gepflegt werden.
-                  Freitext mit Vorschlaegen aus dem, was schon benutzt wurde —
-                  das native datalist rendert dank color-scheme: dark dunkel. */}
+              {/* Fremdbohne: Bohnen, die hier bewusst nicht gepflegt werden. */}
               {beanId === null && (
-                <>
-                  <input
-                    type="text"
-                    list="preshot-bean-labels"
-                    value={beanLabel}
-                    onChange={(e) => { setBeanLabel(e.target.value); }}
-                    placeholder={t("preshot.beanLabelPlaceholder")}
-                    style={{ ...inputStyle, marginTop: 6 }}
-                  />
-                  <datalist id="preshot-bean-labels">
-                    {labelHints.map((h) => (
-                      <option key={h.label} value={h.label}>{`${h.count}×`}</option>
-                    ))}
-                  </datalist>
-                </>
+                <BeanLabelInput
+                  listId="preshot-bean-labels"
+                  value={beanLabel}
+                  onChange={setBeanLabel}
+                  style={{ ...inputStyle, marginTop: 6 }}
+                />
               )}
               {/* Vor dem Mahlen sichtbar: der Beutel traegt keinen Bezug mehr. */}
               {selectedBeanDepleted && (

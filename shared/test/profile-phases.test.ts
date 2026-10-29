@@ -401,6 +401,14 @@ test("Schnell füllen übersteht Phasen ↔ Stufen; „normal“ wird nicht gesp
   assert.equal(validateBrewSteps([{ kind: "preinfusion", fill: "voll" as never, exit: {} }]).ok, false);
 });
 
+test("Sanftheit „keine“ übersteht Phasen ↔ Stufen und ist gültig", async () => {
+  const { validateBrewSteps } = await import("../src/brew-steps.js");
+  const none: BrewStep[] = [{ kind: "preinfusion", gentleness: "none", exit: { pressureBar: 3.8, seconds: 25 }, fill: "fast" }];
+  assert.deepEqual(projectSteps(none).map(phaseToStep), none);
+  assert.deepEqual(validateBrewSteps(none), { ok: true });
+  assert.equal(validateBrewSteps([{ kind: "preinfusion", gentleness: "voll" as never, exit: {} }]).ok, false);
+});
+
 test("Ton am Phasenende übersteht Phasen ↔ Stufen, braucht die App und ist gültig", async () => {
   const { validateBrewSteps } = await import("../src/brew-steps.js");
   const steps: BrewStep[] = [

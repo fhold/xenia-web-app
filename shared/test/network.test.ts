@@ -11,7 +11,7 @@ const shot = (p: Partial<NetShot>): NetShot => ({
   id: ++id, startedAt: id * 1000, profileId: 1, profileName: "Gagne", variantId: 9, basketId: 1, grinderId: 1,
   coffeeId: 5, coffeeName: "Out of the Dark", beanLabel: null, grindSetting: 20, grindNote: null,
   rating: null, acidity: null, bitterness: null, extractionUnder: false, extractionOver: false,
-  channeling: false, channelingSeverity: null, tasteTags: null, isBestBrew: false, ...p,
+  channeling: false, channelingSeverity: null, tasteTags: null, ...p,
 });
 const byProfile = (s: NetShot) => ({ key: `p${s.profileId}`, id: s.profileId, label: s.profileName });
 const byBasketGrinder = (s: NetShot) => ({ basketId: s.basketId, variantId: null, grinderId: s.grinderId });
@@ -28,14 +28,13 @@ test("Zeile: Anzahl, Mahlgrad-Spanne nur mit Mühle, Schnitt nur der bewerteten,
   assert.deepEqual([r.last.grind, r.last.note, r.last.channeling], [21, "coarser", "light"]);
 });
 
-test("Reihenfolge: Referenz vor Anzahl vor zuletzt — nicht nach Bewertung", () => {
+test("Reihenfolge: Anzahl vor zuletzt — nicht nach Bewertung", () => {
   const g = groupNetwork([
     shot({ profileId: 1, profileName: "A", rating: 5 }),
     shot({ profileId: 2, profileName: "B", rating: 1 }), shot({ profileId: 2, profileName: "B", rating: 1 }),
-    shot({ profileId: 3, profileName: "C", isBestBrew: true }),
+    shot({ profileId: 3, profileName: "C" }),
   ], byBasketGrinder, byProfile);
-  assert.deepEqual(g[0]!.rows.map((r) => r.label), ["C", "B", "A"]);
-  assert.equal(g[0]!.rows[0]!.reference?.shotId !== undefined, true);
+  assert.deepEqual(g[0]!.rows.map((r) => r.label), ["B", "C", "A"]);
 });
 
 test("Channeling unbewertet ist „–“, bewertet ohne Marke „keins“; halbe Punkte", () => {

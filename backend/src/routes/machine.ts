@@ -27,6 +27,7 @@ import {
   TARGET_TEMP_MAX_C,
 } from "../../../shared/src/profile-temp.js";
 import type { ProfileTempResetStore } from "../../../shared/src/profile-temp-reset.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 // ---------------------------------------------------------------------------
 // Body schemas (H-4)
@@ -216,7 +217,7 @@ export function registerMachineRoutes(
       reply.status(400);
       const res: ApiResponse = {
         ok: false,
-        error: parse.ok ? "targetTempC is required" : parse.error,
+        error: parse.ok ? L("targetTempC fehlt", "targetTempC is required") : parse.error,
       };
       return res;
     }

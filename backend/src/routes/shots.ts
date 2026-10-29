@@ -20,7 +20,6 @@ import {
 import type { BeanRepo } from "../db/bean-repo.js";
 import type { ProfileRepo } from "../db/profile-repo.js";
 import type { ScriptRepo } from "../db/script-repo.js";
-import type { BestBrewRepo } from "../db/best-brew-repo.js";
 import type { ShotRecorder } from "../shots/recorder.js";
 import type { FlowHoldDriver } from "../xenia/flow-hold-driver.js";
 import type { SettingsRepo } from "../db/settings-repo.js";
@@ -42,6 +41,7 @@ import type {
 } from "../../../shared/src/types.js";
 import { TASTE_TAGS } from "../../../shared/src/types.js";
 import { effectiveVariant } from "../../../shared/src/profile-slots.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 /** How many ghosts a client gets by default / at most, and the stub cutoff. */
 const GHOST_DEFAULT_LIMIT = 20;
@@ -56,7 +56,6 @@ export function registerShotRoutes(
   beanRepo: BeanRepo,
   profileRepo: ProfileRepo,
   scriptRepo: ScriptRepo,
-  bestBrewRepo: BestBrewRepo,
   broadcastShotUpdated: (shot: Shot) => void,
   driver: FlowHoldDriver,
   /** Fuer die Einstellung rating_compare_prev (Vergleich in der Bewertung). */
@@ -199,7 +198,7 @@ export function registerShotRoutes(
     const shot = shotRepo.findActive();
     if (!shot) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: "No active shot" };
+      const res: ApiResponse = { ok: false, error: L("Kein laufender Bezug", "No active shot") };
       return res;
     }
     return shot;
@@ -347,20 +346,19 @@ export function registerShotRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid shot ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Bezugs-ID", "Invalid shot ID") };
       return res;
     }
     const shot = shotRepo.findById(numId);
     if (!shot) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Shot ${id} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Bezug ${id} nicht gefunden`, `Shot ${id} not found`) };
       return res;
     }
     const samples = shotRepo.listSamples(numId);
     const detail: ShotDetail = {
       shot,
       samples,
-      isBestBrew: bestBrewRepo.isBestBrewShot(numId),
       stages: shotRepo.listStages(numId),
       brewSteps: shotRepo.getBrewStepsSnapshot(numId),
       brewDef: brewDefInfo(shot),
@@ -375,7 +373,7 @@ export function registerShotRoutes(
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid shot ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Bezugs-ID", "Invalid shot ID") };
       return res;
     }
     // SO-1: include the live-resolved script content for the commanded overlay.
@@ -398,7 +396,7 @@ export function registerShotRoutes(
   app.get("/api/shots/:id/compare", async (req, reply) => {
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId) || !shotRepo.findById(numId)) {
-      return reply.status(404).send({ ok: false, error: "Shot not found" } as ApiResponse);
+      return reply.status(404).send({ ok: false, error: L("Bezug nicht gefunden", "Shot not found") } as ApiResponse);
     }
     const res: ShotCompare = {
       enabled: settingsRepo?.get("rating_compare_prev") === "true",
@@ -409,22 +407,17 @@ export function registerShotRoutes(
 
   // ---------------------------------------------------------------------------
   // GET /api/shots/:id/compare-suggestions — womit man diesen Bezug vergleichen
-  // will: die Referenz ★ der Sorte und der Bezug davor, als Historienzeilen.
+  // will: der Bezug davor derselben Sorte, als Historienzeile.
   // ---------------------------------------------------------------------------
   app.get("/api/shots/:id/compare-suggestions", async (req, reply) => {
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId) || !shotRepo.findById(numId)) {
-      return reply.status(404).send({ ok: false, error: "Shot not found" } as ApiResponse);
+      return reply.status(404).send({ ok: false, error: L("Bezug nicht gefunden", "Shot not found") } as ApiResponse);
     }
-    const refId = shotRepo.findReferenceSameCoffee(numId);
     const prevId = shotRepo.findPreviousSameCoffee(numId)?.id ?? null;
-    const ids = [refId, prevId].filter((x): x is number => x !== null);
-    const rows = shotRepo.listShotsFiltered({ ids, limit: 2, offset: 0, sort: "date_desc", category: "all" }).shots;
-    const res: CompareSuggestions = {
-      reference: rows.find((s) => s.id === refId) ?? null,
-      // Ist der Vorgaenger zugleich die Referenz, steht er nur einmal da.
-      previous: prevId !== refId ? (rows.find((s) => s.id === prevId) ?? null) : null,
-    };
+    const ids = prevId !== null ? [prevId] : [];
+    const rows = shotRepo.listShotsFiltered({ ids, limit: 1, offset: 0, sort: "date_desc", category: "all" }).shots;
+    const res: CompareSuggestions = { previous: rows[0] ?? null };
     return res;
   });
 
@@ -437,7 +430,7 @@ export function registerShotRoutes(
     if (Number.isNaN(numId)) {
       // NB: do NOT `await reply.status(...)` — awaiting the reply deadlocks in
       // Fastify v5 (it resolves only after the response is sent). Set + return.
-      return reply.status(400).send({ ok: false, error: "Invalid shot ID" } as ApiResponse);
+      return reply.status(400).send({ ok: false, error: L("Ungültige Bezugs-ID", "Invalid shot ID") } as ApiResponse);
     }
     const body = (req.body ?? {}) as ShotUpdate;
 
@@ -469,20 +462,20 @@ export function registerShotRoutes(
         (!Array.isArray(body.tasteTags) ||
           !body.tasteTags.every((t) => (TASTE_TAGS as readonly string[]).includes(t))));
     if (bad) {
-      return reply.status(400).send({ ok: false, error: "Invalid rating value" } as ApiResponse);
+      return reply.status(400).send({ ok: false, error: L("Ungültige Bewertung", "Invalid rating value") } as ApiResponse);
     }
     // Ein Urteil braucht den Bezug, gegen den es gefaellt wurde.
     if (body.vsPrev != null) {
       const ref = body.vsPrevShotId;
       if (!(typeof ref === "number" && Number.isInteger(ref) && ref !== numId && shotRepo.findById(ref))) {
-        return reply.status(400).send({ ok: false, error: "Vergleichsbezug fehlt oder gibt es nicht." } as ApiResponse);
+        return reply.status(400).send({ ok: false, error: L("Vergleichsbezug fehlt oder gibt es nicht.", "The comparison shot is missing or does not exist.") } as ApiResponse);
       }
     }
     if (body.basketId !== undefined && !(Number.isInteger(body.basketId) && baskets.findById(body.basketId))) {
-      return reply.status(400).send({ ok: false, error: `Sieb ${String(body.basketId)} gibt es nicht.` } as ApiResponse);
+      return reply.status(400).send({ ok: false, error: L(`Sieb ${String(body.basketId)} gibt es nicht.`, `Basket ${String(body.basketId)} does not exist.`) } as ApiResponse);
     }
     if (!shotRepo.updateShot(numId, body)) {
-      return reply.status(404).send({ ok: false, error: `Shot ${numId} not found` } as ApiResponse);
+      return reply.status(404).send({ ok: false, error: L(`Bezug ${numId} nicht gefunden`, `Shot ${numId} not found`) } as ApiResponse);
     }
     // Live cross-client sync: push the updated shot so other clients (e.g. the
     // tablet showing the post-shot review) refresh without a manual reload.
@@ -511,13 +504,13 @@ export function registerShotRoutes(
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid shot ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Bezugs-ID", "Invalid shot ID") };
       return res;
     }
     const shot = shotRepo.findById(numId);
     if (!shot) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: "Shot not found" };
+      const res: ApiResponse = { ok: false, error: L("Bezug nicht gefunden", "Shot not found") };
       return res;
     }
 
@@ -575,12 +568,12 @@ export function registerShotRoutes(
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid shot ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Bezugs-ID", "Invalid shot ID") };
       return res;
     }
     if (!shotRepo.deleteShot(numId)) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Shot ${numId} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Bezug ${numId} nicht gefunden`, `Shot ${numId} not found`) };
       return res;
     }
     reply.status(204).send();
@@ -599,7 +592,7 @@ export function registerShotRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid shot ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Bezugs-ID", "Invalid shot ID") };
       return res;
     }
 
@@ -608,7 +601,7 @@ export function registerShotRoutes(
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: `Shot ${id} is not currently active`,
+        error: L(`Bezug ${id} läuft gerade nicht`, `Shot ${id} is not currently active`),
       };
       return res;
     }
@@ -633,6 +626,19 @@ export function registerShotRoutes(
       // The machine never took the stop — take the mark back, otherwise a later
       // natural script end of this shot would be booked as 'manual'.
       recorder.clearManualStop(numId);
+      // Issue #1: the poller cannot reach the machine either — the stop cannot arrive. End the
+      // recording instead of leaving the app in brew mode; the script finishes on the machine.
+      if (recorder.isMachineOffline && recorder.endOnConnectionLost("stop")) {
+        reply.status(502);
+        const res: ApiResponse = {
+          ok: false,
+          error: L(
+            "Maschine nicht erreichbar – Aufzeichnung beendet, das Skript läuft auf der Maschine zu Ende.",
+            "Machine unreachable – recording ended; the script finishes on the machine.",
+          ),
+        };
+        return res;
+      }
       reply.status(502);
       const msg = err instanceof XeniaError ? err.message : String(err);
       const res: ApiResponse = { ok: false, error: msg };

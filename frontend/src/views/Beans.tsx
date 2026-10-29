@@ -33,14 +33,12 @@ import { CoffeePicker } from "../components/CoffeePicker.js";
 import { CoffeeProfiles } from "../components/Network.js";
 import type { ShotFilters } from "../hooks/useShots.js";
 import { useTranslation } from "../i18n/index.js";
-import type { Bean, BeanRating, BestBrewSummary, Coffee, Profile } from "@shared/types.js";
+import type { Bean, BeanRating, Coffee, Profile } from "@shared/types.js";
 import { activeSiblings, preferDeactivate } from "@shared/coffee.js";
 import theme, { alpha } from "../theme.js";
 
 const C = theme;
 const MONO = "'JetBrains Mono', monospace";
-// BB-a: Best-Brew reference accent (per spec).
-const BEST = C.acc;
 
 type SortKey = "recent" | "name" | "rating" | "age";
 type FilterKey = "all" | "active" | "favourite" | "available" | "archived";
@@ -360,43 +358,11 @@ function OverflowItem({ icon, label, danger, onClick }: { icon: React.ReactNode;
   );
 }
 
-// BB-a: the Sorte's Best-Brew reference — live-joined stats + tap-to-shot.
-/** Best-Brew als ruhige Fusszeile statt als eigene Box. */
-function BestBrewLine({ summary, onOpenShot }: {
-  summary: BestBrewSummary | null; onOpenShot: (shotId: number) => void;
-}) {
-  const { t } = useTranslation();
-  const bits = summary
-    ? [
-        summary.brewTimeS !== null ? `${Math.round(summary.brewTimeS)} s` : null,
-        summary.ratio !== null ? `1:${summary.ratio.toFixed(1)}` : null,
-        summary.peakPressureBar !== null ? `${summary.peakPressureBar.toFixed(1)} bar` : null,
-      ].filter(Boolean).join(" · ")
-    : "";
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 12, fontSize: 11.5, color: C.mut }}>
-      {/* dim ist hier richtig: Icon, kein Text. */}
-      <span style={{ display: "inline-flex", color: summary ? BEST : C.dim }}>
-        <Star size={12} fill="currentColor" color="currentColor" />
-      </span>
-      {summary ? (
-        <button onClick={() => onOpenShot(summary.shotId)}
-          style={{ background: "none", border: "none", padding: 0, font: "inherit", color: C.acc, cursor: "pointer", textAlign: "left" }}>
-          {t("bestBrew.slotLabel")}{bits ? ` — ${bits}` : ""}
-        </button>
-      ) : (
-        <span>{t("bestBrew.slotLabel")} — {t("bestBrew.noneShort")}</span>
-      )}
-    </div>
-  );
-}
-
-function DetailHead({ c, onNachkaufen, onEdit, onMerge, onDelete, onToggleFav, onRate, onOpenShot,
+function DetailHead({ c, onNachkaufen, onEdit, onMerge, onDelete, onToggleFav, onRate,
                      onPickImage, onRemoveImage, imageBusy }: {
   c: CoffeeView;
   onNachkaufen: () => void; onEdit: () => void; onMerge: () => void; onDelete: () => void;
   onToggleFav: () => void; onRate: (v: BeanRating | null) => void;
-  onOpenShot: (shotId: number) => void;
   onPickImage: (file: File) => void; onRemoveImage: () => void; imageBusy: boolean;
 }) {
   const { t } = useTranslation();
@@ -500,8 +466,6 @@ function DetailHead({ c, onNachkaufen, onEdit, onMerge, onDelete, onToggleFav, o
         <ThumbsSeg value={c.rating} onChange={onRate} />
         <div style={{ marginLeft: "auto" }}><StarBtn on={c.favourite} size={36} onClick={onToggleFav} /></div>
       </div>
-
-      <BestBrewLine summary={c.bestBrew ?? null} onOpenShot={onOpenShot} />
 
       {/* Bild gross ansehen. z 150: ueber der Ansicht, aber unter der
           MachineErrorLine (200) — ein Maschinenfehler darf nie verdeckt
@@ -843,8 +807,6 @@ interface BeansProps {
   /** F-B7: open the History view pre-filtered to a roasting (bean) id; the
    *  coffeeId lets the app offer a "back to this Sorte" affordance (SD-1). */
   onOpenHistory: (beanId: number, coffeeId: number) => void;
-  /** BB-a: open the History detail for a Best-Brew reference shot (Sorte card tap). */
-  onOpenShot: (shotId: number, coffeeId: number) => void;
   /** Selected coffee id (controlled by the app so the detail survives a trip to
    *  the filtered History and back — SD-1). */
   selectedId: number | null;
@@ -861,7 +823,7 @@ interface BeansProps {
   };
 }
 
-export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectId, onBack, network }: BeansProps) {
+export function Beans({ mobile, onOpenHistory, selectedId, onSelectId, onBack, network }: BeansProps) {
   const { t } = useTranslation();
   const api: UseCoffeesReturn = useCoffees();
   const { coffees, loading, error } = api;
@@ -1010,7 +972,6 @@ export function Beans({ mobile, onOpenHistory, onOpenShot, selectedId, onSelectI
             onDelete={() => void handleDeleteCoffee(selected)}
             onToggleFav={() => void api.toggleFavourite(selected)}
             onRate={(v) => void api.setCoffeeRating(selected.id, v)}
-            onOpenShot={(shotId) => onOpenShot(shotId, selected.id)}
           />
         );
         const list = <RoastingList c={selected} onOpenHistory={(bid) => onOpenHistory(bid, selected.id)} onKebab={setSheet} onAddRoasting={() => setRoastingEditor({ coffee: selected })} />;

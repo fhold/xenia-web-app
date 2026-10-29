@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import type { ApiResponse } from "../../../shared/src/types.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 /**
  * A rejected body must still answer in the ApiResponse shape { ok, error } —
@@ -18,7 +19,7 @@ export function apiErrorHandler(
       `Rejected body for ${req.url}: ${err.message}`,
     );
     reply.status(400);
-    return { ok: false, error: `Ungültige Anfrage: ${err.message}` };
+    return { ok: false, error: L(`Ungültige Anfrage: ${err.message}`, `Invalid request: ${err.message}`) };
   }
   reply.status(err.statusCode ?? 500);
   return { ok: false, error: err.message };

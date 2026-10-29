@@ -28,7 +28,6 @@ const { applySchema, migrateTestCategory } = await import("../src/db/schema.js")
 const { SqliteShotRepo } = await import("../src/db/shot-repo.js");
 const { SqliteBeanRepo } = await import("../src/db/bean-repo.js");
 const { SqliteCoffeeRepo } = await import("../src/db/coffee-repo.js");
-const { SqliteBestBrewRepo } = await import("../src/db/best-brew-repo.js");
 const { SqliteProfileRepo } = await import("../src/db/profile-repo.js");
 const { SqliteScriptRepo } = await import("../src/db/script-repo.js");
 const { SqliteSettingsRepo } = await import("../src/db/settings-repo.js");
@@ -120,7 +119,7 @@ const viewer = shot("brew", now - 100_000, "Dark Bezug", 12); // spaeter: Messla
 const shots = new SqliteShotRepo();
 const settings = new SqliteSettingsRepo();
 const app = Fastify({ logger: false });
-registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), profiles, {} as never, {} as never, () => {}, {} as never, settings);
+registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), profiles, {} as never, () => {}, {} as never, settings);
 
 test("Ausschluss: Vorlagen, Geister, Netz, Vergleich, Vorschläge sehen nur Bezüge", async () => {
   // Fuer die Vorlagen den spaeteren Bezug ausblenden — sonst gewaenne er ohnehin.
@@ -148,11 +147,6 @@ test("Ausschluss: Bestand, Zähler und letzter Bezug der Sorte zählen den Messl
   assert.equal(c.shotCount, 2);
   // Loeschschutz zaehlt bewusst alles — sonst verschwaende die Historie mit der Sorte.
   assert.equal(new SqliteCoffeeRepo().shotCount(coffeeId), 3);
-});
-
-test("Ausschluss: ein Messlauf kann nicht bester Bezug werden", () => {
-  const r = new SqliteBestBrewRepo().setByShot(measure);
-  assert.equal(r.ok, false);
 });
 
 test("Historie: Standard bleibt Bezug, der Filter „test“ zeigt nur Messläufe", async () => {

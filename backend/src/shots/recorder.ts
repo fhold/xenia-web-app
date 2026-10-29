@@ -48,6 +48,11 @@ const ARMED_TIMEOUT_MS = 5_000;
 /** MA_STATUS values that terminate a recording session. */
 const ENDING_STATUSES = new Set([1, 4]); // ON (returned to idle) or DRAINING
 
+/** So lange darf die Maschine in einem Skript-Bezug unerreichbar sein, bevor die Aufzeichnung
+ *  endet (Issue #1: sonst hing die App im Bezugsmodus, bis die Maschine wiederkam). Kurze
+ *  WLAN-Aussetzer bleiben ein Bezug mit Luecke. */
+const CONNECTION_LOST_END_MS = 30_000;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -231,6 +236,12 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
   private watchdogFired = false;
   private watchdogFiredAt: number | null = null;
   private watchdogLastRefireAt: number | null = null;
+
+  /** Issue #1: seit wann der Poller die Maschine nicht erreicht (null = erreichbar), wann das
+   *  letzte Frame kam (Ende eines abgebrochenen Bezugs) und der Zeitgeber bis zum Beenden. */
+  private machineOfflineSince: number | null = null;
+  private lastFrameAt: number | null = null;
+  private connectionLostTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** BBW auto-calibration (BC-parity) — captured per shot for the lag feedback loop. */
   private bbwTargetG: number | null = null;
@@ -434,11 +445,45 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
   }
 
   /**
+   * Issue #1: the poller reports the machine reachable / unreachable. A script shot whose
+   * machine stays away for CONNECTION_LOST_END_MS ends its recording. Not in driveMode: an
+   * app-driven shot belongs to the driver, whose stop sequence needs the machine.
+   */
+  setMachineOnline(online: boolean): void {
+    if (online) {
+      this.machineOfflineSince = null;
+      this.clearConnectionLostTimer();
+      return;
+    }
+    if (this.machineOfflineSince !== null) return;
+    this.machineOfflineSince = Date.now();
+    if (this.current !== null && !this.driveMode) {
+      this.connectionLostTimer = setTimeout(() => { this.endOnConnectionLost("timeout"); }, CONNECTION_LOST_END_MS);
+      this.connectionLostTimer.unref?.();
+    }
+  }
+
+  /** True while the poller cannot reach the machine. */
+  get isMachineOffline(): boolean {
+    return this.machineOfflineSince !== null;
+  }
+
+  /** Ends a script shot whose machine is unreachable (timer, or Stop that could not get
+   *  through). Returns false when there is nothing to end (no shot, or an app-driven one). */
+  endOnConnectionLost(by: "timeout" | "stop"): boolean {
+    this.clearConnectionLostTimer();
+    if (this.current === null || this.driveMode) return false;
+    this.finalizeConnectionLost(by);
+    return true;
+  }
+
+  /**
    * Called on every poller 'frame' event.
    * Drives the state machine: armed → recording, recording → finalized.
    */
   onFrame(frame: LiveFrame): void {
     this.lastWeightG = frame.scaleWeightG;
+    this.lastFrameAt = Date.now();
 
     const status = frame.machineStatus;
     // A flow-hold drive brews in paddle mode (MA_STATUS=5); a normal script shot
@@ -1037,6 +1082,11 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
 
     // Reset per-shot stop flags so nothing bleeds into the new shot.
     // (startRecording() resets these again too — belt and suspenders.)
+    this.resetShotFlags();
+  }
+
+  /** Per-shot stop flags back to idle after a defensive finalize (superseded, connection lost). */
+  private resetShotFlags(): void {
     this.manualStopShotId = null;
     this.appStopPending = false;
     this.appStopRequested = false;
@@ -1050,6 +1100,50 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
     this.driveMode = false;
     this.driveStopMode = null;
     this.shotLogger = null;
+  }
+
+  /**
+   * Issue #1: a script shot whose machine stays unreachable. No frame can end it, the stop
+   * cannot reach the machine — close the recording instead of leaving the app in brew mode.
+   * The script runs to its end on the machine; the curve is kept up to the last frame, which
+   * is also ended_at. The yield is unknown: null, flagged like a scale dropout (`scale_lost`),
+   * the cause goes to the log. Already in post-brew (the brew itself ended), it closes
+   * normally with the weight it has.
+   */
+  private finalizeConnectionLost(by: "timeout" | "stop"): void {
+    const cur = this.current!;
+    const lastFrameAgoMs = this.lastFrameAt !== null ? Date.now() - this.lastFrameAt : null;
+    (this.shotLogger ?? this.logger).warn(
+      { tag: "recorder", event: "connection_lost", by, shot_id: cur.id, last_frame_ago_ms: lastFrameAgoMs, sample_count: cur.sampleCount },
+      `Shot #${cur.id}: machine unreachable (${by}) — recording ended, last frame ${lastFrameAgoMs ?? "?"} ms ago`,
+    );
+    if (this.postBrew !== null) {
+      this.postBrewDurationMs = Date.now() - this.postBrew.startedAt;
+      this.postBrewStopReason = "timeout";
+      this.postBrew = null;
+      this.finalizeRecording();
+      return;
+    }
+    this.current = null;
+    this.repo.finalizeShot(cur.id, this.lastFrameAt ?? Date.now(), "script_end", null, {
+      stopTriggerWeightG: this.bbwStopTriggerWeightG,
+      flowAtTriggerGPerS: this.bbwTriggerFlow,
+      residualLagSUsed: this.bbwResidualLagSUsed,
+      bbwLeftBrewingLagMs: this.bbwLeftBrewingLagMs,
+      postBrewDurationMs: this.postBrewDurationMs,
+      postBrewStopReason: this.postBrewStopReason,
+      scaleLost: true,
+    });
+    const shot = this.repo.findById(cur.id);
+    if (shot) this.emit("shotEnded", shot, cur.sampleCount);
+    this.resetShotFlags();
+  }
+
+  private clearConnectionLostTimer(): void {
+    if (this.connectionLostTimer !== null) {
+      clearTimeout(this.connectionLostTimer);
+      this.connectionLostTimer = null;
+    }
   }
 
   /**
@@ -1441,6 +1535,7 @@ export class ShotRecorder extends EventEmitter<RecorderEvents> {
    */
   stop(): void {
     this.clearArmed();
+    this.clearConnectionLostTimer();
   }
 
   // ---------------------------------------------------------------------------

@@ -23,8 +23,8 @@ import type { ConnectionState } from "../hooks/useXeniaFrame.js";
 import theme from "../theme.js";
 import { dec } from "../lib/num.js";
 import { ColorSchemes } from "../components/ColorSchemes.js";
-import { useThemeChoice } from "../themeStartup.js";
-import { parseColorSchemes, UI_THEME_PATTERN } from "@shared/color-scheme.js";
+import { deviceThemeChoice, useThemeChoice } from "../themeStartup.js";
+import { parseColorSchemes } from "@shared/color-scheme.js";
 import type { ColorScheme } from "@shared/color-scheme.js";
 
 const C = theme;
@@ -53,6 +53,7 @@ interface FormState {
   show_script_overlay: boolean;
   show_pump_curve: boolean;
   show_ghosts: boolean;
+  live_soll_curve: boolean;
   ghost_count: string;
   // brew-by-weight
   brew_by_weight_active: boolean;
@@ -277,6 +278,7 @@ export function Settings({
           show_script_overlay:          (data["show_script_overlay"]           ?? "false") === "true",
           show_pump_curve:              (data["show_pump_curve"]               ?? "false") === "true",
           show_ghosts:                  (data["show_ghosts"]                   ?? "false") === "true",
+          live_soll_curve:              (data["live_soll_curve"]               ?? "false") === "true",
           ghost_count:                   data["ghost_count"]                   ?? "20",
           chart_x_resize_animation:     (data["chart_x_resize_animation"]      ?? "true") === "true",
           brew_by_weight_active:        (data["brew_by_weight_active"]          ?? "false") === "true",
@@ -306,7 +308,7 @@ export function Settings({
           preshot_field_dose:           (data["preshot_field_dose"]          ?? "true")  === "true",
           preshot_field_profile_notes:  (data["preshot_field_profile_notes"] ?? "true")  === "true",
           language:                     (data["language"] === "en" ? "en" : "de") as Language,
-          ui_theme:                     data["ui_theme"] && UI_THEME_PATTERN.test(data["ui_theme"]) ? data["ui_theme"] : "dark",
+          ui_theme:                     deviceThemeChoice().ui,
           ui_color_schemes:             parseColorSchemes(data["ui_color_schemes"]),
         });
       })
@@ -666,6 +668,21 @@ export function Settings({
           onChange={(val) => {
             setField("show_pump_curve", val);
             void saveToggle("show_pump_curve", val, onChartSettingsSaved);
+          }}
+        />
+      </Row>
+
+      <Row
+        label={t("settings.chart.liveSoll.label")}
+        description={t("settings.chart.liveSoll.description")}
+        saveStatus={saveStatuses["live_soll_curve"]}
+        {...rowProps}
+      >
+        <Toggle
+          checked={form.live_soll_curve}
+          onChange={(val) => {
+            setField("live_soll_curve", val);
+            void saveToggle("live_soll_curve", val, onChartSettingsSaved);
           }}
         />
       </Row>
@@ -1269,17 +1286,11 @@ export function Settings({
       <Row
         label={t("settings.ui.theme.label")}
         description={t("settings.ui.theme.description")}
-        saveStatus={saveStatuses["ui_theme"]}
         {...rowProps}
       >
         <select
           value={form.ui_theme}
-          onChange={async (e) => {
-            const ui = e.target.value;
-            setStatus("ui_theme", "saving");
-            if (await putSetting("ui_theme", ui)) useThemeChoice({ ui, schemes: form.ui_color_schemes });
-            else setStatus("ui_theme", "error");
-          }}
+          onChange={(e) => useThemeChoice({ ui: e.target.value, schemes: form.ui_color_schemes })}
           style={{
             background: C.card,
             color: C.txt,
@@ -1305,7 +1316,6 @@ export function Settings({
         active={form.ui_theme}
         onSave={async (next, use) => {
           if (!(await putSetting("ui_color_schemes", JSON.stringify(next)))) return false;
-          if (use !== null && use !== form.ui_theme && !(await putSetting("ui_theme", use))) return false;
           const ui = use ?? form.ui_theme;
           // Neu laden nur, wenn sich das gerade gültige Schema ändert.
           const was = form.ui_color_schemes.find((sc) => `scheme:${sc.id}` === form.ui_theme);

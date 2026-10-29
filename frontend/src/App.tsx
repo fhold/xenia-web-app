@@ -117,7 +117,7 @@ function fmtRest(g: number | null): string {
 }
 
 export default function App() {
-  const { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev, driveStage } = useXeniaFrame();
+  const { connectionState, machineState, frame, setpoints, activeShot, lastEndedShot, lastUpdatedShot, maintenance, maintenanceDone, dismissMaintenanceDone, profilesRev, driveStage, driveStages } = useXeniaFrame();
   const { t } = useTranslation();
   const breakpoint = useBreakpoint();
   const control = useMachineControl();
@@ -163,9 +163,6 @@ export default function App() {
   // Historie zeigt dann ihren Zurueck-Knopf.
   const openHistoryForRoasting = useCallback((beanId: number) => {
     nav.go({ view: "history", jump: true, history: { beanId } });
-  }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
-  const openHistoryForShot = useCallback((shotId: number) => {
-    nav.go({ view: "history", jump: true, history: { shotId } });
   }, [nav.go]); // eslint-disable-line react-hooks/exhaustive-deps
   const openHistoryForProfile = useCallback((profileId: number) => {
     nav.go({ view: "history", jump: true, history: { profileId } });
@@ -225,7 +222,7 @@ export default function App() {
   // an lastEndedShot aus dem Live-Ereignis.
   const restoredShot = useLastBrewShot();
   const dashboardShot = lastEndedShot ?? restoredShot;
-  const { samples } = useShotSamples({ frame, activeShot, lastEndedShot: dashboardShot });
+  const { samples, ended: endedStages } = useShotSamples({ frame, activeShot, lastEndedShot: dashboardShot });
   const { settings: chartXSettings, refetch: refetchChart } = useChartSettings();
   const { refetch: refetchBrew } = useBrewByWeightSettings();
 
@@ -680,6 +677,8 @@ export default function App() {
                 restoredShot={lastEndedShot === null && restoredShot !== null}
                 profiles={profiles}
                 driveStage={driveStage}
+                driveStages={driveStages}
+                endedStages={endedStages}
                 maintenance={maintenance}
                 maintenanceDone={
                   maintenanceDone !== null &&
@@ -744,7 +743,6 @@ export default function App() {
               <Beans
                 mobile={isMobile}
                 onOpenHistory={openHistoryForRoasting}
-                onOpenShot={openHistoryForShot}
                 selectedId={loc.coffeeId ?? null}
                 onSelectId={(id) => (id !== null ? nav.go({ view: "beans", coffeeId: id }) : nav.replace({ view: "beans" }))}
                 onBack={() => nav.back({ view: "beans" })}

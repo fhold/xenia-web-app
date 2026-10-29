@@ -17,7 +17,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import { WsHub } from "../src/ws/broadcast.js";
-import type { Shot, WsMessage } from "../../shared/src/types.js";
+import type { DriveStage, Shot, WsMessage } from "../../shared/src/types.js";
 
 const logger = {
   child: () => logger,
@@ -90,18 +90,27 @@ test("H-6: the replayed shot carries later field updates", async () => {
   assert.equal(started?.data.doseG, 18);
 });
 
-test("Stufe eines App-Bezugs: ein Client, der mitten im Bezug verbindet, bekommt sie — nach dem Ende nicht mehr", async () => {
+test("Stufen eines App-Bezugs: ein Client, der mitten im Bezug verbindet, bekommt alle bisherigen — nach dem Ende keine mehr", async () => {
   const { hub, url, stop } = await startHub();
-  hub.broadcastDriveStage({ index: 0, kind: "preinfusion", name: "Füllen" });
+  const st = (index: number, kind: DriveStage["kind"], name: string, enteredAt: number, setpoint: DriveStage["setpoint"]): DriveStage =>
+    ({ index, kind, name, tone: false, enteredAt, setpoint });
+  hub.broadcastDriveStage(st(0, "preinfusion", "Füllen", 1000, null));
   hub.broadcastShotStarted(shot(42));
-  hub.broadcastDriveStage({ index: 1, kind: "flow", name: "Fluss halten" });
+  hub.broadcastDriveStage(st(1, "flow", "Fluss halten", 9000, { from: 0.8, to: 1.5, rampMs: 6000, adopted: false }));
 
   const during = await snapshot(url);
-  const stage = during.find((m) => m.type === "driveStage") as { data: unknown } | undefined;
-  assert.deepEqual(stage?.data, { index: 1, kind: "flow", name: "Fluss halten" });
+  const stages = during.filter((m) => m.type === "driveStage").map((m) => (m as { data: DriveStage }).data);
+  assert.deepEqual(stages.map((x) => [x.index, x.enteredAt]), [[0, 1000], [1, 9000]]);
+  assert.deepEqual(stages[1]!.setpoint, { from: 0.8, to: 1.5, rampMs: 6000, adopted: false });
 
   hub.broadcastShotEnded(shot(42), 100);
   const after = await snapshot(url);
+  const afterStages = after.filter((m) => m.type === "driveStage").length; // vor dem nächsten Senden zählen
+  // Neuer Bezug: Stufe 0 beginnt die Liste neu.
+  hub.broadcastDriveStage(st(0, "pressure", "Druck", 50_000, { from: 0, to: 9, rampMs: 2000, adopted: false }));
+  hub.broadcastShotStarted(shot(43));
+  const next = await snapshot(url);
   stop();
-  assert.equal(after.find((m) => m.type === "driveStage"), undefined);
+  assert.equal(afterStages, 0);
+  assert.deepEqual(next.filter((m) => m.type === "driveStage").map((m) => (m as { data: DriveStage }).data.index), [0]);
 });

@@ -8,6 +8,7 @@ import type {
   BrewType,
 } from "../../../shared/src/types.js";
 import type { CoffeeLike } from "../lib/coffee-matching.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 // ---------------------------------------------------------------------------
 // §3.4b — Coffee (Sorte) repository. The canonical "Klammer" that holds master
@@ -256,7 +257,7 @@ export class SqliteCoffeeRepo implements CoffeeRepo {
   deleteWithRoastings(id: number): void {
     const shots = this.shotCount(id);
     if (shots > 0) {
-      throw new Error(`coffee has ${shots} shots on its roastings — refusing to delete`);
+      throw new Error(L(`Sorte hat ${shots} Bezüge an ihren Röstungen — nicht gelöscht`, `coffee has ${shots} shots on its roastings — refusing to delete`));
     }
     const db = getDb();
     // Beide Loeschungen in EINER Transaktion: sonst bliebe bei einem Fehler
@@ -274,7 +275,7 @@ export class SqliteCoffeeRepo implements CoffeeRepo {
 
   delete(id: number): void {
     if (this.roastingCount(id) > 0) {
-      throw new Error("coffee has roastings — reassign or delete them first (ON DELETE RESTRICT)");
+      throw new Error(L("Sorte hat noch Röstungen — erst verschieben oder löschen", "coffee has roastings — reassign or delete them first (ON DELETE RESTRICT)"));
     }
     const db = getDb();
     db.prepare("DELETE FROM coffee WHERE id = ?").run(id);

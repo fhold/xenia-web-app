@@ -198,6 +198,7 @@ const KIND_COLOR: Record<PhaseKind, string> = { pressure: C.seriesPressure, flow
 const UNIT: Record<PhaseKind, string> = { pressure: "bar", flow: "g/s", power: "%", pause: "", preinfusion: "" };
 const gentleOptions = (): { key: PreinfusionGentleness; label: string }[] => [
   { key: "gentle", label: t("editor.gentle.gentle") }, { key: "normal", label: t("editor.gentle.normal") }, { key: "brisk", label: t("editor.gentle.brisk") },
+  { key: "none", label: t("editor.gentle.none") },
 ];
 const fillOptions = (): { key: PreinfusionFill; label: string }[] => [
   { key: "normal", label: t("editor.fill.normal") }, { key: "fast", label: t("editor.fill.fast") },
@@ -224,6 +225,7 @@ const isHold = (p: Phase) => "pumpIndex" in p && (p as { pumpIndex: number | nul
 
 function autoLabel(p: Phase): string {
   if (p.kind === "pause") return kindLabel("pause");
+  if (p.kind === "preinfusion" && p.gentleness === "none") return t("editor.phase.autoPreinfusionNone");
   if (p.kind === "preinfusion") return t("editor.phase.autoPreinfusion", { gentle: gentleOptions().find((g) => g.key === (p.gentleness ?? "normal"))!.label });
   const parts = { kind: kindLabel(p.kind), value: p.target === null ? "—" : fmt(p.target), unit: UNIT[p.kind] };
   return isHold(p) ? t("editor.phase.autoLabelHold", parts) : t("editor.phase.autoLabel", parts);

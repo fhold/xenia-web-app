@@ -162,7 +162,7 @@ export function CoffeeProfiles({ coffeeId, mobile, profiles, onStart, onOpenHist
                 <div style={{ flex: mobile ? "1 1 100%" : 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
                   {r.id !== null && p ? (
                     <button onClick={() => onOpenProfile(r.id!)} style={{ padding: 0, border: "none", background: "transparent", textAlign: "left", cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600, color: C.txt, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {r.reference && <span style={{ color: C.acc }}>★ </span>}{r.label}
+                      {r.label}
                     </button>
                   ) : <span style={{ fontSize: 14, fontWeight: 600, color: C.txtS }}>{r.label}</span>}
                   {p && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>#{p.id}{p.targetTempC !== null ? ` · ${num(p.targetTempC)} °C` : ""}</span>}
@@ -236,7 +236,7 @@ export function ProfileRanWith({ profileId, variantId, variantName, onOpenHistor
               </span>
               <span style={{ width: 100, fontFamily: MONO, color: C.txtS }}>{r.grindMin !== null ? t("profileList.network.grindShort", { v: range(r.grindMin, r.grindMax) }) : "–"}</span>
               <span style={{ width: 104 }}><Rating avg={r.ratingAvg} rated={r.rated} size={8} /></span>
-              <span style={{ flex: 1, fontSize: 11.5, color: C.acc }}>{r.reference ? `★ ${t("profileList.network.reference")}${r.reference.grind !== null ? ` · ${t("profileList.network.grindShort", { v: num(r.reference.grind) })}` : ""}` : ""}</span>
+              <span style={{ flex: 1 }} />
               {r.id !== null && onOpenCoffee && (
                 <button onClick={() => onOpenCoffee(r.id!)} style={{ padding: "0 4px", height: 28, border: "none", background: "transparent", color: C.accLight, fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>{t("profileList.network.coffee")}</button>
               )}

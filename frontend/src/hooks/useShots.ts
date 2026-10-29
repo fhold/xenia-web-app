@@ -80,8 +80,6 @@ export interface UseShotsReturn {
   loadMore: () => void;
   update: (id: number, patch: ShotUpdate) => Promise<void>;
   remove: (id: number) => Promise<void>;
-  /** Flag/move the reference to this shot, or unflag if it is already the reference. */
-  toggleBestBrew: (id: number, makeBest: boolean) => Promise<void>;
 }
 
 export function useShots(): UseShotsReturn {
@@ -164,36 +162,11 @@ export function useShots(): UseShotsReturn {
     setTotal((t) => Math.max(0, t - 1));
   }, []);
 
-  // Flag (set/move) or unflag the Best-Brew reference for a shot. Because the
-  // reference is unique per Sorte, flagging one shot silently clears the star
-  // from any sibling that pointed at the same Sorte — so refetch the range.
-  const toggleBestBrew = useCallback(
-    async (id: number, makeBest: boolean): Promise<void> => {
-      setShots((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, isBestBrew: makeBest } : s)),
-      );
-      const res = makeBest
-        ? await fetch(`/api/best-brew`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ shotId: id }),
-          })
-        : await fetch(`/api/best-brew?shotId=${id}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) {
-        await reloadLoaded();
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
-      }
-      await reloadLoaded();
-    },
-    [reloadLoaded],
-  );
-
   const setFilters = useCallback((f: ShotFilters) => { setFiltersState(f); }, []);
   const resetFilters = useCallback(() => { setFiltersState(DEFAULT_SHOT_FILTERS); }, []);
 
   return {
     shots, total, hasMore, loading, loadingMore, error,
-    filters, setFilters, resetFilters, loadMore, update, remove, toggleBestBrew,
+    filters, setFilters, resetFilters, loadMore, update, remove,
   };
 }

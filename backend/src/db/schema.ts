@@ -1603,7 +1603,9 @@ export function applySchema(): void {
   `);
 
   // ---------------------------------------------------------------------------
-  // Best Brew (BB-a) — per-Sorte reference pointer to one shot.
+  // Best Brew (BB-a) — per-Sorte reference pointer to one shot. The feature was
+  // removed on 2026-10-29 (unused); nothing reads or writes the table any more.
+  // It stays so that reverting the removal brings the stars back.
   // Exactly one reference per coffee (coffee_id PRIMARY KEY → upsert moves the
   // star). Pure pointer, no snapshot: the reference values are live-joined from
   // the shot. Both FKs cascade ONTO the pointer only — deleting the shot or the

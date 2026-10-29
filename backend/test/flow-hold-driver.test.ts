@@ -11,7 +11,7 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { FlowHoldDriver } from "../src/xenia/flow-hold-driver.js";
-import type { BrewStep, LiveFrame } from "../../shared/src/types.js";
+import type { BrewStep, DriveStage, LiveFrame } from "../../shared/src/types.js";
 
 /** Was der Treiber dem Recorder ueber die Stufen meldet. */
 type StageLike = { stageIndex: number; exitReason: string | null };
@@ -222,7 +222,7 @@ test("start refuses a cold brew boiler when a warm-up floor is set", async () =>
         ARM,
         frame({ brewBoilerTempC: 80 }),
       ),
-    /too cold/,
+    /zu kalt/,
   );
   assert.equal(driver.isActive(), false);
 });
@@ -790,7 +790,7 @@ test("a pressure step raises power when measured pressure is under setpoint", as
     [{ kind: "pressure", targetPressureBar: 9 }],
     { pumpPressureBar: 3 },
   );
-  // Hold measured pressure well below the 9-bar setpoint → the PI loop must
+  // Hold measured pressure well below the 9-bar setpoint → the pressure loop must
   // drive the pump power up past the seed (52) over several ticks.
   for (let t = 700; t <= 6000; t += 200) {
     clock = t;
@@ -802,7 +802,7 @@ test("a pressure step raises power when measured pressure is under setpoint", as
     .map((c) => c.arg as number);
   assert.ok(
     powers.some((p) => p > 52),
-    `pressure PI never climbed above the seed (max ${Math.max(...powers)})`,
+    `pressure loop never climbed above the seed (max ${Math.max(...powers)})`,
   );
 });
 
@@ -836,14 +836,14 @@ test("start rejects a malformed step sequence without arming", async () => {
   clock = 0;
   await assert.rejects(
     () => driver.start({ steps: [{ kind: "power", power: -1 } as BrewStep] }, 36, ARM, frame()),
-    /power between 0 and 100/,
+    /Leistung zwischen 0 und 100/,
   );
   assert.equal(driver.isActive(), false);
 
   // A power step is written to the pump open-loop, so >100 % is not a setting.
   await assert.rejects(
     () => driver.start({ steps: [{ kind: "power", power: 150 } as BrewStep] }, 36, ARM, frame()),
-    /power between 0 and 100/,
+    /Leistung zwischen 0 und 100/,
   );
   assert.equal(driver.isActive(), false);
 
@@ -860,7 +860,7 @@ test("start rejects a malformed step sequence without arming", async () => {
         ARM,
         frame(),
       ),
-    /needs an exit/,
+    /braucht einen Ausstieg/,
   );
   assert.equal(driver.isActive(), false);
 
@@ -872,7 +872,7 @@ test("start rejects a malformed step sequence without arming", async () => {
         ARM,
         frame(),
       ),
-    /positive targetPressureBar/,
+    /positives Druckziel/,
   );
   assert.equal(driver.isActive(), false);
 });
@@ -1006,7 +1006,7 @@ test("K-1: shutdown during a drive issues a verified hard stop and blocks new st
   // New starts are refused after shutdown.
   await assert.rejects(
     () => driver.start(undefined, 36, ARM, frame()),
-    /shutting down/,
+    /fährt gerade herunter/,
   );
 });
 
@@ -1164,7 +1164,8 @@ test("Preinfusion: kommt kein Kaffee, beendet die Druckgrenze sie wie bisher", a
 
 test("Druckrampe startet beim gemessenen Druck: nach der Füllstufe nimmt die Regelung die Pumpe nicht zurück", async () => {
   // Frueher startete die Rampe beim letzten Druck-Sollwert (0): bei 4 bar im Puck las
-  // die Regelung „viel zu viel Druck“ und nahm die Pumpe auf ~24 % zurueck.
+  // die Regelung „viel zu viel Druck“ und nahm die Pumpe auf ~24 % zurueck. Ab dem
+  // gemessenen Druck folgt sie der Rampe nach oben.
   const { driver, calls } = makeDriver();
   clock = 0;
   await driver.start(
@@ -1184,7 +1185,8 @@ test("Druckrampe startet beim gemessenen Druck: nach der Füllstufe nimmt die Re
   }
   await flush();
   const powers = calls.filter((c) => c.method === "paddlePumppower").map((c) => c.arg as number);
-  assert.ok(Math.min(...powers) >= 38, `Pumpe an der Übergabe zurückgenommen: ${powers.join(", ")}`);
+  assert.ok(Math.min(...powers) >= 34, `Pumpe an der Übergabe zurückgenommen: ${powers.join(", ")}`);
+  assert.ok(powers.at(-1)! > 45, `Pumpe folgt der Rampe nicht: ${powers.join(", ")}`);
 });
 
 test("Fluss übernehmen: Ziel ist das Mittel der letzten Sekunde, verbucht als Ziel der Stufe, Übergabe stoßfrei", async () => {
@@ -1367,7 +1369,7 @@ test("onStage meldet Stufe 0 beim Start und jeden Wechsel — mit Name, sonst nu
     { kind: "flow", targetFlowGs: 1.4, exit: {} },
   ];
   await driver.start({ maxBrewMs: 60_000, steps }, 36, ARM, frame({ pumpPressureBar: 6 }));
-  assert.deepEqual(seen, [{ index: 0, kind: "power", name: "Bloom", tone: true }]);
+  assert.deepEqual(seen, [{ index: 0, kind: "power", name: "Bloom", tone: true, enteredAt: 0, setpoint: { from: 0, to: 0, rampMs: 0, adopted: false } }]);
 
   // wie oben: erst ueber der Schwelle (schaerft den Ausstieg), dann darunter
   for (const [t, p] of [[500, 4], [1000, 1.8]] as const) {
@@ -1375,7 +1377,7 @@ test("onStage meldet Stufe 0 beim Start und jeden Wechsel — mit Name, sonst nu
     driver.onFrame(frame({ pumpPressureBar: p, scaleWeightG: 0, flowRateGPerS: 0 }));
     await flush();
   }
-  assert.deepEqual(seen[1], { index: 1, kind: "flow", name: null, tone: false });
+  assert.deepEqual(seen[1], { index: 1, kind: "flow", name: null, tone: false, enteredAt: 1000, setpoint: { from: 1.4, to: 1.4, rampMs: 0, adopted: false } });
   assert.equal(seen.length, 2);
 });
 
@@ -1501,4 +1503,22 @@ test("mit Ziel zählen die Ausstiege der letzten Stufe weiter nicht (die Waage s
     await flush();
   }
   assert.equal(state.stopMode, null);
+});
+
+test("Stufenwechsel meldet Eintritt und Sollwert, mit dem der Treiber fährt — Rampe ab gemessenem Druck", async () => {
+  const { driver } = await startInHold([
+    { kind: "power", power: 44, exit: { seconds: 1 } },
+    { kind: "pressure", targetPressureBar: 9, rampMs: 2000, exit: {} },
+  ]);
+  const seen: DriveStage[] = [];
+  driver.onStage = (s) => seen.push(s);
+  clock = 700;
+  driver.onFrame(frame({ scaleWeightG: 1.6, pumpPressureBar: 3.4 }));
+  clock = 1600;
+  driver.onFrame(frame({ scaleWeightG: 1.7, pumpPressureBar: 3.6 }));
+  await flush();
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.index, 1);
+  assert.equal(seen[0]!.enteredAt, 1600);
+  assert.deepEqual(seen[0]!.setpoint, { from: 3.6, to: 9, rampMs: 2000, adopted: false });
 });

@@ -10,6 +10,7 @@
  */
 
 import type { Logger } from "../log.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 const DEFAULT_TIMEOUT_MS = 1500;
 
@@ -178,7 +179,7 @@ export class XeniaClient {
       this.logIn(res.status, t0);
       if (!res.ok) {
         throw new XeniaError(
-          `HTTP ${res.status} from GET ${path}`,
+          L(`Die Maschine antwortet mit HTTP ${res.status} auf GET ${path}`, `HTTP ${res.status} from GET ${path}`),
           "http",
           res.status,
         );
@@ -189,13 +190,13 @@ export class XeniaClient {
       if (err instanceof Error && err.name === "AbortError") {
         this.logErr("TIMEOUT GET " + path, t0, err);
         throw new XeniaError(
-          `Request timed out after ${timeoutMs}ms: GET ${path}`,
+          L(`Die Maschine antwortet nicht (nach ${timeoutMs} ms): GET ${path}`, `Request timed out after ${timeoutMs}ms: GET ${path}`),
           "timeout",
         );
       }
       this.logErr("NETWORK GET " + path, t0, err);
       throw new XeniaError(
-        `Network error on GET ${path}: ${(err as Error).message}`,
+        L(`Maschine nicht erreichbar (GET ${path}): ${(err as Error).message}`, `Network error on GET ${path}: ${(err as Error).message}`),
         "network",
       );
     } finally {
@@ -223,7 +224,7 @@ export class XeniaClient {
       this.logIn(res.status, t0);
       if (!res.ok) {
         throw new XeniaError(
-          `HTTP ${res.status} from POST ${path}`,
+          L(`Die Maschine antwortet mit HTTP ${res.status} auf POST ${path}`, `HTTP ${res.status} from POST ${path}`),
           "http",
           res.status,
         );
@@ -234,13 +235,13 @@ export class XeniaClient {
       if (err instanceof Error && err.name === "AbortError") {
         this.logErr("TIMEOUT POST " + path, t0, err);
         throw new XeniaError(
-          `Request timed out after ${this.timeoutMs}ms: POST ${path}`,
+          L(`Die Maschine antwortet nicht (nach ${this.timeoutMs} ms): POST ${path}`, `Request timed out after ${this.timeoutMs}ms: POST ${path}`),
           "timeout",
         );
       }
       this.logErr("NETWORK POST " + path, t0, err);
       throw new XeniaError(
-        `Network error on POST ${path}: ${(err as Error).message}`,
+        L(`Maschine nicht erreichbar (POST ${path}): ${(err as Error).message}`, `Network error on POST ${path}: ${(err as Error).message}`),
         "network",
       );
     } finally {
@@ -274,7 +275,7 @@ export class XeniaClient {
       this.logIn(res.status, t0);
       if (!res.ok) {
         throw new XeniaError(
-          `HTTP ${res.status} from POST ${path}`,
+          L(`Die Maschine antwortet mit HTTP ${res.status} auf POST ${path}`, `HTTP ${res.status} from POST ${path}`),
           "http",
           res.status,
         );
@@ -284,13 +285,13 @@ export class XeniaClient {
       if (err instanceof Error && err.name === "AbortError") {
         this.logErr("TIMEOUT POST " + path, t0, err);
         throw new XeniaError(
-          `Request timed out after ${this.timeoutMs}ms: POST ${path}`,
+          L(`Die Maschine antwortet nicht (nach ${this.timeoutMs} ms): POST ${path}`, `Request timed out after ${this.timeoutMs}ms: POST ${path}`),
           "timeout",
         );
       }
       this.logErr("NETWORK POST " + path, t0, err);
       throw new XeniaError(
-        `Network error on POST ${path}: ${(err as Error).message}`,
+        L(`Maschine nicht erreichbar (POST ${path}): ${(err as Error).message}`, `Network error on POST ${path}: ${(err as Error).message}`),
         "network",
       );
     } finally {
@@ -455,7 +456,7 @@ export class XeniaClient {
       this.logIn(res.status, t0);
       if (!res.ok) {
         throw new XeniaError(
-          `HTTP ${res.status} from GET ${path}`,
+          L(`Die Maschine antwortet mit HTTP ${res.status} auf GET ${path}`, `HTTP ${res.status} from GET ${path}`),
           "http",
           res.status,
         );
@@ -467,13 +468,13 @@ export class XeniaClient {
       if (err instanceof Error && err.name === "AbortError") {
         this.logErr("TIMEOUT GET " + path, t0, err);
         throw new XeniaError(
-          `Request timed out after ${this.timeoutMs}ms: GET ${path}`,
+          L(`Die Maschine antwortet nicht (nach ${this.timeoutMs} ms): GET ${path}`, `Request timed out after ${this.timeoutMs}ms: GET ${path}`),
           "timeout",
         );
       }
       this.logErr("NETWORK GET " + path, t0, err);
       throw new XeniaError(
-        `Network error on GET ${path}: ${(err as Error).message}`,
+        L(`Maschine nicht erreichbar (GET ${path}): ${(err as Error).message}`, `Network error on GET ${path}: ${(err as Error).message}`),
         "network",
       );
     } finally {
@@ -523,7 +524,7 @@ export class XeniaClient {
       this.logIn(res.status, t0);
       if (!res.ok) {
         throw new XeniaError(
-          `HTTP ${res.status} from GET ${path}`,
+          L(`Die Maschine antwortet mit HTTP ${res.status} auf GET ${path}`, `HTTP ${res.status} from GET ${path}`),
           "http",
           res.status,
         );
@@ -535,13 +536,13 @@ export class XeniaClient {
       if (err instanceof Error && err.name === "AbortError") {
         this.logErr("TIMEOUT GET " + path, t0, err);
         throw new XeniaError(
-          `Request timed out after ${this.timeoutMs}ms: GET ${path}`,
+          L(`Die Maschine antwortet nicht (nach ${this.timeoutMs} ms): GET ${path}`, `Request timed out after ${this.timeoutMs}ms: GET ${path}`),
           "timeout",
         );
       }
       this.logErr("NETWORK GET " + path, t0, err);
       throw new XeniaError(
-        `Network error on GET ${path}: ${(err as Error).message}`,
+        L(`Maschine nicht erreichbar (GET ${path}): ${(err as Error).message}`, `Network error on GET ${path}: ${(err as Error).message}`),
         "network",
       );
     } finally {

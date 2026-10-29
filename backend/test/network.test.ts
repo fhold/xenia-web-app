@@ -57,7 +57,7 @@ shot(hell, v1!.id, basket("single"), 23, null);
 const app = Fastify({ logger: false });
 const shots = new SqliteShotRepo();
 registerNetworkRoutes(app, shots);
-registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), profiles, {} as never, {} as never, () => {}, {} as never);
+registerShotRoutes(app, {} as never, shots, {} as never, new SqliteBeanRepo(), profiles, {} as never, () => {}, {} as never);
 const get = async (url: string) => (await app.inject({ url })).json();
 
 test("Sorte: je Sieb und Mühle die Profile — nur Siebe mit Bezügen, das Doppelsieb ohne Bezug fehlt", async () => {

@@ -16,7 +16,6 @@ import { MAX_IMAGE_BYTES, sniffImageMime } from "../../../shared/src/image-mime.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SqliteCoffeeRepo } from "../db/coffee-repo.js";
 import type { SqliteBeanRepo } from "../db/bean-repo.js";
-import type { BestBrewRepo } from "../db/best-brew-repo.js";
 import { getDb } from "../db/index.js";
 import { matchAgainstCoffees } from "../lib/coffee-matching.js";
 import type {
@@ -25,6 +24,7 @@ import type {
   BrewType,
   BeanRating,
 } from "../../../shared/src/types.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 const VALID_BREW_TYPES = new Set<BrewType>(["espresso", "filter", "omni"]);
 const VALID_RATINGS = new Set<BeanRating>(["thumbs_down", "meh", "thumbs_up"]);
@@ -46,7 +46,7 @@ function buildFirstRoasting(
 ): { create: BeanCreate } | { error: string } {
   const bagSizeG = typeof fr["bagSizeG"] === "number" ? (fr["bagSizeG"] as number) : NaN;
   if (!Number.isFinite(bagSizeG) || bagSizeG <= 0) {
-    return { error: "firstRoasting.bagSizeG (positive number) is required" };
+    return { error: L("firstRoasting.bagSizeG (positive Zahl) fehlt", "firstRoasting.bagSizeG (positive number) is required") };
   }
   const status: BeanStatus =
     typeof fr["status"] === "string" && VALID_BEAN_STATUS.has(fr["status"] as BeanStatus)
@@ -77,7 +77,7 @@ function brewTypeError(body: Record<string, unknown>): string | null {
   const v = body["brewType"];
   if (v === null || v === undefined) return null;
   if (typeof v === "string" && VALID_BREW_TYPES.has(v as BrewType)) return null;
-  return "brewType must be one of: espresso, filter, omni (or null)";
+  return L("Zubereitung muss espresso, filter oder omni sein (oder leer)", "brewType must be one of: espresso, filter, omni (or null)");
 }
 
 function ratingError(body: Record<string, unknown>): string | null {
@@ -85,26 +85,23 @@ function ratingError(body: Record<string, unknown>): string | null {
   const v = body["rating"];
   if (v === null || v === undefined) return null;
   if (typeof v === "string" && VALID_RATINGS.has(v as BeanRating)) return null;
-  return "rating must be one of: thumbs_down, meh, thumbs_up (or null)";
+  return L("Bewertung muss thumbs_down, meh oder thumbs_up sein (oder leer)", "rating must be one of: thumbs_down, meh, thumbs_up (or null)");
 }
 
 export function registerCoffeeRoutes(
   app: FastifyInstance,
   coffeeRepo: SqliteCoffeeRepo,
   beanRepo: SqliteBeanRepo,
-  bestBrewRepo: BestBrewRepo,
 ): void {
-  // GET /api/coffees — BB-a: each coffee carries its live-joined best-brew ref.
-  app.get("/api/coffees", async () =>
-    coffeeRepo.listAll().map((c) => ({ ...c, bestBrew: bestBrewRepo.getSummary(c.id) })),
-  );
+  // GET /api/coffees
+  app.get("/api/coffees", async () => coffeeRepo.listAll());
 
   // GET /api/coffees/match?name=&roaster= — registered before /:id (static wins).
   app.get(
     "/api/coffees/match",
     async (req: FastifyRequest<{ Querystring: { name?: string; roaster?: string } }>, reply) => {
       const name = (req.query.name ?? "").trim();
-      if (name === "") return reply.status(400).send({ error: "name is required" });
+      if (name === "") return reply.status(400).send({ error: L("Name fehlt", "name is required") });
       const roaster = req.query.roaster ?? null;
       return matchAgainstCoffees({ name, roaster }, coffeeRepo.listForMatching());
     },
@@ -115,10 +112,10 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const coffee = coffeeRepo.findById(id);
-      if (!coffee) return reply.status(404).send({ error: "Coffee not found" });
-      return { ...coffee, bestBrew: bestBrewRepo.getSummary(id) };
+      if (!coffee) return reply.status(404).send({ error: L("Sorte nicht gefunden", "Coffee not found") });
+      return coffee;
     },
   );
 
@@ -127,8 +124,8 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id/roastings",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: "Coffee not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: L("Sorte nicht gefunden", "Coffee not found") });
       return beanRepo.listByCoffee(id);
     },
   );
@@ -149,9 +146,9 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id/image",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const img = coffeeRepo.getImage(id);
-      if (!img) return reply.status(404).send({ error: "No image" });
+      if (!img) return reply.status(404).send({ error: L("Kein Bild vorhanden", "No image") });
       // Immutable ist sicher, weil die URL den Zeitstempel als ?v= traegt.
       return reply
         .header("Content-Type", img.mime)
@@ -165,28 +162,28 @@ export function registerCoffeeRoutes(
     { bodyLimit: 2_000_000 },
     async (req: FastifyRequest<{ Params: { id: string }; Body: unknown }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: "Coffee not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: L("Sorte nicht gefunden", "Coffee not found") });
 
       const body = (req.body ?? {}) as Record<string, unknown>;
       const data = body["data"];
       if (typeof data !== "string" || data === "") {
-        return reply.status(400).send({ error: "Body must include { data: base64 }" });
+        return reply.status(400).send({ error: L("Der Inhalt braucht { data: base64 }", "Body must include { data: base64 }") });
       }
       let bytes: Buffer;
       try {
         bytes = Buffer.from(data, "base64");
       } catch {
-        return reply.status(400).send({ error: "data is not valid base64" });
+        return reply.status(400).send({ error: L("data ist kein gültiges Base64", "data is not valid base64") });
       }
-      if (bytes.length === 0) return reply.status(400).send({ error: "data is empty" });
+      if (bytes.length === 0) return reply.status(400).send({ error: L("data ist leer", "data is empty") });
       if (bytes.length > MAX_IMAGE_BYTES) {
         return reply
           .status(413)
-          .send({ error: `Image too large (max ${Math.round(MAX_IMAGE_BYTES / 1024)} kB)` });
+          .send({ error: L(`Bild zu groß (höchstens ${Math.round(MAX_IMAGE_BYTES / 1024)} kB)`, `Image too large (max ${Math.round(MAX_IMAGE_BYTES / 1024)} kB)`) });
       }
       const mime = sniffImageMime(bytes);
-      if (!mime) return reply.status(400).send({ error: "Only JPEG, PNG or WebP" });
+      if (!mime) return reply.status(400).send({ error: L("Nur JPEG, PNG oder WebP", "Only JPEG, PNG or WebP") });
 
       coffeeRepo.putImage(id, mime, bytes);
       const stored = coffeeRepo.getImage(id)!;
@@ -198,8 +195,8 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id/image",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!coffeeRepo.deleteImage(id)) return reply.status(404).send({ error: "No image" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!coffeeRepo.deleteImage(id)) return reply.status(404).send({ error: L("Kein Bild vorhanden", "No image") });
       return reply.status(204).send();
     },
   );
@@ -211,7 +208,7 @@ export function registerCoffeeRoutes(
       const body = (req.body ?? {}) as Record<string, unknown>;
       const name = body["name"];
       if (typeof name !== "string" || name.trim() === "") {
-        return reply.status(400).send({ error: "name is required" });
+        return reply.status(400).send({ error: L("Name fehlt", "name is required") });
       }
       const btErr = brewTypeError(body);
       if (btErr) return reply.status(400).send({ error: btErr });
@@ -226,7 +223,7 @@ export function registerCoffeeRoutes(
         return reply.status(201).send({ id, name });
       }
       if (typeof fr !== "object" || Array.isArray(fr)) {
-        return reply.status(400).send({ error: "firstRoasting must be an object" });
+        return reply.status(400).send({ error: L("firstRoasting muss ein Objekt sein", "firstRoasting must be an object") });
       }
       const built = buildFirstRoasting(0, name.trim(), fr as Record<string, unknown>);
       if ("error" in built) return reply.status(400).send({ error: built.error });
@@ -257,8 +254,8 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id/roastings",
     async (req: FastifyRequest<{ Params: { id: string }; Body: unknown }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: "Coffee not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: L("Sorte nicht gefunden", "Coffee not found") });
       const body = (req.body ?? {}) as Record<string, unknown>;
       const create: BeanCreate = {
         // name is required by the type but master data lives on the coffee; the
@@ -290,14 +287,14 @@ export function registerCoffeeRoutes(
       reply: FastifyReply,
     ) => {
       const sourceId = parseInt(req.params.id, 10);
-      if (isNaN(sourceId)) return reply.status(400).send({ error: "Invalid id" });
+      if (isNaN(sourceId)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
       const targetId = req.body?.targetId;
       if (typeof targetId !== "number" || !Number.isInteger(targetId)) {
-        return reply.status(400).send({ error: "targetId (integer) is required" });
+        return reply.status(400).send({ error: L("targetId (ganze Zahl) fehlt", "targetId (integer) is required") });
       }
-      if (targetId === sourceId) return reply.status(400).send({ error: "targetId must differ from source" });
-      if (!coffeeRepo.findById(sourceId)) return reply.status(404).send({ error: "Source coffee not found" });
-      if (!coffeeRepo.findById(targetId)) return reply.status(404).send({ error: "Target coffee not found" });
+      if (targetId === sourceId) return reply.status(400).send({ error: L("Ziel und Quelle müssen verschieden sein", "targetId must differ from source") });
+      if (!coffeeRepo.findById(sourceId)) return reply.status(404).send({ error: L("Quell-Sorte nicht gefunden", "Source coffee not found") });
+      if (!coffeeRepo.findById(targetId)) return reply.status(404).send({ error: L("Ziel-Sorte nicht gefunden", "Target coffee not found") });
 
       const db = getDb();
       db.exec("BEGIN");
@@ -324,8 +321,8 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id",
     async (req: FastifyRequest<{ Params: { id: string }; Body: unknown }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: "Coffee not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: L("Sorte nicht gefunden", "Coffee not found") });
       const body = (req.body ?? {}) as Record<string, unknown>;
       const btErr = brewTypeError(body);
       if (btErr) return reply.status(400).send({ error: btErr });
@@ -341,8 +338,8 @@ export function registerCoffeeRoutes(
     "/api/coffees/:id",
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) return reply.status(400).send({ error: "Invalid id" });
-      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: "Coffee not found" });
+      if (isNaN(id)) return reply.status(400).send({ error: L("Ungültige ID", "Invalid id") });
+      if (!coffeeRepo.findById(id)) return reply.status(404).send({ error: L("Sorte nicht gefunden", "Coffee not found") });
       // Roestungen duerfen mitgehen, solange an keiner ein Bezug haengt: dann
       // geht nichts von der Historie verloren. Sobald ein Bezug daran haengt,
       // bleibt es bei der Ablehnung — er wuerde sonst seine Bohne verlieren
@@ -350,7 +347,7 @@ export function registerCoffeeRoutes(
       const shots = coffeeRepo.shotCount(id);
       if (shots > 0) {
         return reply.status(409).send({
-          error: `Sorte hat ${shots} Bezüge an ihren Röstungen — zuerst verschieben/zusammenführen`,
+          error: L(`Sorte hat ${shots} Bezüge an ihren Röstungen — zuerst verschieben/zusammenführen`, `The coffee has ${shots} shots on its roastings — move or merge them first`),
         });
       }
       const roastings = coffeeRepo.roastingCount(id);

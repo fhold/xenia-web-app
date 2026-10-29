@@ -21,6 +21,7 @@ export const editor = {
     gentle: "sanft",
     normal: "normal",
     brisk: "zügig",
+    none: "keine",
   },
   fill: {
     normal: "normal",
@@ -59,7 +60,7 @@ export const editor = {
     gentleness: {
       line1: "Füllt zuerst den Raum über dem Kaffee, dann tränkt sie den Puck.",
       line2: "Sobald etwas Gegendruck da ist (ab 1 bar), fließt weniger nach:",
-      line3: "sanft 1,5 · normal 2,0 · zügig 2,5 ml/s.",
+      line3: "sanft 1,5 · normal 2,0 · zügig 2,5 ml/s · keine: wie beim Füllen.",
       line4: "Die Zeitgrenze unter „Ausstieg“ ist nur ein Schutz.",
     },
     fill: {
@@ -106,6 +107,7 @@ export const editor = {
     autoLabel: "{kind} {value} {unit}",
     autoLabelHold: "{kind} {value} {unit} halten",
     autoPreinfusion: "Preinfusion {gentle}",
+    autoPreinfusionNone: "Preinfusion ungebremst",
     yieldSub: "Yield {v} g",
     forSeconds: "für {v} s",
     exitMissing: "Ausstieg fehlt",

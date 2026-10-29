@@ -1,7 +1,7 @@
 /**
  * ShotEditModal — edits the editable fields of a recorded shot.
  *
- * Fields: bean, grinder, basket (brew shots), grind setting, RPM, dose, TDS, notes.
+ * Fields: bean (or free-text bean label), grinder, basket (brew shots), grind setting, RPM, dose, TDS, notes.
  *
  * Die BEWERTUNG wird hier nicht als Sternenreihe nachgebaut, sondern an den
  * Bewertungsscreen abgegeben — derselbe Weg wie im Bezugs-Detail. Vorher gab
@@ -18,7 +18,7 @@ import { useTranslation } from "../i18n/index.js";
 import { useBeans } from "../hooks/useBeans.js";
 import { useGrinders } from "../hooks/useGrinders.js";
 import { useBaskets, basketName } from "../hooks/useBaskets.js";
-import { BeanPicker } from "./BeanPicker.js";
+import { BeanPicker, BeanLabelInput } from "./BeanPicker.js";
 import { RatingModal, ratingFacts } from "./RatingModal.js";
 import { ratingValuesToPatch } from "./RatingScreen.js";
 import { hasRating } from "@shared/shot-rating.js";
@@ -84,6 +84,8 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
   const { baskets } = useBaskets();
 
   const [beanId, setBeanId]           = useState<number | null>(shot.beanId);
+  // Fremdbohne als Freitext — wie in „Bezug vorbereiten“, nur ohne gepflegte Bohne.
+  const [beanLabel, setBeanLabel]     = useState(shot.beanLabel ?? "");
   // Schnitt 3e: das benutzte Sieb, korrigierbar — nur bei Bezuegen (Wartung hat keins).
   const [basketId, setBasketId]       = useState<number | null>(shot.basketId ?? null);
   const [grinderId, setGrinderId]     = useState<number | null>(shot.grinderId);
@@ -120,6 +122,7 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
   const dirty =
     basketId !== (shot.basketId ?? null) ||
     beanId !== shot.beanId ||
+    (beanId === null ? beanLabel.trim() || null : null) !== (shot.beanId === null ? shot.beanLabel : null) ||
     grinderId !== shot.grinderId ||
     grindSetting !== numToStr(shot.grindSetting) ||
     grinderRpm !== numToStr(shot.grinderRpm) ||
@@ -139,6 +142,7 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
       const patch: ShotUpdate = {
         ...(basketId !== null && basketId !== (shot.basketId ?? null) ? { basketId } : {}),
         beanId,
+        beanLabel: beanId === null && beanLabel.trim() !== "" ? beanLabel.trim() : null,
         grinderId,
         grindSetting: grindSetting.trim() !== "" ? parseFloat(grindSetting) : null,
         grinderRpm: grinderRpm.trim() !== "" ? parseInt(grinderRpm, 10) : null,
@@ -203,6 +207,14 @@ export function ShotEditModal({ shot, onSave, onClose }: ShotEditModalProps) {
             onChange={setBeanId}
             style={inputStyle}
           />
+          {beanId === null && (
+            <BeanLabelInput
+              listId="shotedit-bean-labels"
+              value={beanLabel}
+              onChange={setBeanLabel}
+              style={{ ...inputStyle, marginTop: 6 }}
+            />
+          )}
         </Field>
 
         <div style={{ display: "grid", gridTemplateColumns: shot.category === "brew" ? "1fr 1fr" : "1fr", gap: 10 }}>

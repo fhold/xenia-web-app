@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { X, Pencil, Trash2, Repeat, Star, Maximize, Minimize, ArrowLeftRight } from "lucide-react";
+import { X, Pencil, Trash2, Repeat, Maximize, Minimize, ArrowLeftRight } from "lucide-react";
 import { ShotChart } from "./ShotChart.js";
 import { useShotGhosts } from "../hooks/useShotGhosts.js";
 import { RatingDots } from "./RatingDots.js";
@@ -21,6 +21,7 @@ import { useShotDetail } from "../hooks/useShotDetail.js";
 import { useChartSettings } from "../hooks/useChartSettings.js";
 import { buildScriptOverlay } from "@shared/script-overlay.js";
 import { flowStageStrip, scriptStageStrip, flowPreinfusionEndS, firstDropS } from "@shared/stage-strip.js";
+import { brewEndSeconds, liveSollCurve, recordedStageEntries } from "@shared/live-stage.js";
 import { useBreakpoint } from "../hooks/useBreakpoint.js";
 import { useBaskets, basketName } from "../hooks/useBaskets.js";
 import { HoverTip } from "./HoverTip.js";
@@ -31,8 +32,6 @@ import type { BrewProfile, ShotListItem, ShotUpdate } from "@shared/types.js";
 import theme, { alpha } from "../theme.js";
 
 const C = theme;
-// Best-Brew accent — the flagged-reference star colour (per BB-a spec).
-const BEST = C.acc;
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
 
 /** Bezugsdatum mit Uhrzeit — Jahr nur, wenn nicht das laufende (lib/dates). */
@@ -125,15 +124,13 @@ interface ShotDetailModalProps {
   onRepeat?: (shot: ShotListItem) => void;
   /** Disable repeat (e.g. while a brew is running). */
   repeatBlocked?: boolean;
-  /** Flag/move (or clear) the Best-Brew reference. Only shown for brew shots. */
-  onToggleBest?: (shot: ShotListItem, makeBest: boolean) => void;
   /** Klick auf den Profilnamen: dieses Profil im Editor öffnen — in der Variante des Bezugs. */
   onOpenProfile?: (profileId: number, variantId: number | null) => void;
   /** Bezuege vergleichen: diesen als A nehmen, den zweiten in der Historie waehlen. */
   onCompare?: (shot: ShotListItem) => void;
 }
 
-export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpdate, onRepeat, repeatBlocked, onToggleBest, onOpenProfile, onCompare }: ShotDetailModalProps) {
+export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpdate, onRepeat, repeatBlocked, onOpenProfile, onCompare }: ShotDetailModalProps) {
   const { t, lang } = useTranslation();
   const breakpoint = useBreakpoint();
   const isDesktop = breakpoint === "desktop";
@@ -215,7 +212,6 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
   const [nameHover, setNameHover] = useState(false);
   // Local copy so the star reflects the toggle immediately (the `shot` prop is
   // a snapshot from when the modal opened; the list refetch lands after close).
-  const [isBest, setIsBest] = useState(shot.isBestBrew);
   const isRated = hasRating(rv);
   // Extraktion: nur zeigen, was tatsaechlich markiert ist. Hier stand frueher
   // "ausgewogen", sobald under/over leer waren — Channeling war ausgenommen,
@@ -268,13 +264,15 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
     return shot.yieldTargetG;
   }, [brewSteps, shot.yieldTargetG]);
 
-  // Flow-Hold Soll-Kurve (History): a green flow-target staircase of the stages
-  // that ACTUALLY ran, faint ghost refs for planned flow stages that never ran,
-  // and vertical markers at the real stage entries. Only flow stages carry a flow
-  // Soll — a power/pressure pre-infusion has NONE (per the driver: the flow Soll
-  // begins at the first flow stage and ramps in from the measured flow over
-  // rampMs, it does not start at 0). Built from the persisted stage transitions +
-  // the brew_steps snapshot, so it reflects what this shot ran, not today's profile.
+  // Ende des Bruehens — fuer Soll-Kurve und Stufenleiste.
+  const brewEndS = useMemo(() => brewEndSeconds(samples), [samples]);
+
+  // Flow-Hold Soll-Kurve (History): the pressure and flow stages that ACTUALLY ran,
+  // computed exactly like the live chart (shared/live-stage) from the persisted
+  // stage transitions + the brew_steps snapshot, so it reflects what this shot ran,
+  // not today's profile. Ramps start at the measured value, the pre-infusion has no
+  // Soll, the last stage ends at the pump stop. Plus faint ghost refs for planned
+  // flow stages that never ran and vertical markers at the real stage entries.
   const stageOverlay = useMemo<ShotChartStageOverlay | null>(() => {
     if (stages.length === 0) return null;
     const durS =
@@ -284,60 +282,28 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
           ? chartSamples[chartSamples.length - 1].t
           : 0;
 
-    // Measured flow at a given elapsed second (linear interp) — the ramp start.
-    const flowAt = (tS: number): number => {
-      if (chartSamples.length === 0) return 0;
-      let prev = chartSamples[0];
-      for (const s of chartSamples) {
-        if (s.t >= tS) {
-          if (s.flow === null) return prev.flow ?? 0;
-          if (prev.flow === null || s.t === prev.t) return s.flow;
-          const f = (tS - prev.t) / (s.t - prev.t);
-          return prev.flow + (s.flow - prev.flow) * f;
-        }
-        prev = s;
-      }
-      return prev.flow ?? 0;
-    };
-
     const snapSteps = brewSteps?.steps ?? [];
-    const flowSoll: { t: number; v: number }[] = [];
     const markers: { t: number; label: string }[] = [];
-    let lastSollV: number | null = null;
 
     stages.forEach((st, i) => {
-      // Stage 0 starts before the first sample (driver runs ahead of the
-      // machine's brewing report) — clamp so the Soll line starts at the axis.
-      const startS = Math.max(0, st.enteredMs / 1000);
-      const endS = i + 1 < stages.length ? stages[i + 1].enteredMs / 1000 : durS;
       // Vertical marker at every real phase change (skip the t=0 start).
-      if (i > 0) {
-        const named = snapSteps[st.stageIndex]?.name?.trim() || null;
-        const label =
-          named ??
-          (st.stepKind === "flow" && st.targetFlowGs !== null
-            ? `${st.targetFlowGs.toFixed(1)} g/s`
-            : st.stepKind === "pressure" && st.targetPressureBar !== null
-              ? `${st.targetPressureBar.toFixed(0)} bar`
-              : st.stepKind === "power" && st.targetPower !== null
-                ? `${st.targetPower.toFixed(0)} %`
-                : "");
-        markers.push({ t: startS, label: `▸ ${label} · ${Math.round(startS)}s` });
-      }
-      // Only flow stages carry a flow Soll line.
-      if (st.stepKind !== "flow" || st.targetFlowGs === null) return;
-      const snap = snapSteps[st.stageIndex];
-      const rampMs = snap && snap.kind === "flow" && snap.rampMs ? snap.rampMs : 0;
-      const target = st.targetFlowGs;
-      const rampStart = rampMs > 0 ? flowAt(startS) : target;
-      flowSoll.push({ t: parseFloat(startS.toFixed(2)), v: parseFloat(rampStart.toFixed(3)) });
-      if (rampMs > 0) {
-        const rampEndS = Math.min(endS, startS + rampMs / 1000);
-        flowSoll.push({ t: parseFloat(rampEndS.toFixed(2)), v: target });
-      }
-      flowSoll.push({ t: parseFloat(endS.toFixed(2)), v: target });
-      lastSollV = target;
+      if (i === 0) return;
+      const startS = Math.max(0, st.enteredMs / 1000);
+      const named = snapSteps[st.stageIndex]?.name?.trim() || null;
+      const label =
+        named ??
+        (st.stepKind === "flow" && st.targetFlowGs !== null
+          ? `${st.targetFlowGs.toFixed(1)} g/s`
+          : st.stepKind === "pressure" && st.targetPressureBar !== null
+            ? `${st.targetPressureBar.toFixed(0)} bar`
+            : st.stepKind === "power" && st.targetPower !== null
+              ? `${st.targetPower.toFixed(0)} %`
+              : "");
+      markers.push({ t: startS, label: `▸ ${label} · ${Math.round(startS)}s` });
     });
+
+    const soll = liveSollCurve(recordedStageEntries(stages, snapSteps, chartSamples), brewEndS);
+    const lastSollV = soll.flow.length > 0 ? soll.flow[soll.flow.length - 1]!.v : null;
 
     // Planned flow stages that never ran → a faint continuation staircase into
     // the tail the ended-mode X domain adds past the last sample (durS → +2s).
@@ -359,21 +325,15 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
         ? { t: parseFloat(durS.toFixed(2)), label: `${fmtG(masterStopG)} g · ~${Math.round(durS)}s` }
         : null;
 
-    if (flowSoll.length === 0 && markers.length === 0 && ghostSoll.length === 0) return null;
-    return { flowSoll, ghostSoll, markers, masterStop };
-  }, [stages, brewSteps, chartSamples, shot.endedAt, shot.startedAt, shot.stopMode, masterStopG]);
+    if (soll.flow.length === 0 && soll.bar.length === 0 && markers.length === 0 && ghostSoll.length === 0) return null;
+    return { flowSoll: soll.flow, barSoll: soll.bar, ghostSoll, markers, masterStop };
+  }, [stages, brewSteps, chartSamples, brewEndS, shot.endedAt, shot.startedAt, shot.stopMode, masterStopG]);
 
   // Stufenleiste unter dem Diagramm: welche Stufe wann lief, was sie beendet hat,
   // was nicht mehr drankam — Flow-Bezug aus den echten Stufenwechseln, Skript-
   // Bezug aus dem Skript. Endpunkt ist das Ende des Bruehens, nicht das Ende der
   // Aufzeichnung (der Nachlauf laeuft noch bis zu 15 s weiter).
   const stageStrip = useMemo(() => {
-    const postBrew = samples.find((s) => s.phase === "post_brew");
-    const brewEndS = postBrew
-      ? postBrew.elapsedMs / 1000
-      : chartSamples.length > 0
-        ? chartSamples[chartSamples.length - 1].t
-        : 0;
     const weightStop = shot.stopMode === "cmd27" || shot.stopMode === "app" || shot.stopMode === "flowhold";
     const stop = { mode: shot.stopMode, weightG: weightStop ? shot.yieldTargetG : null };
     const strip =
@@ -388,7 +348,7 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
     const wEnd = wAt(brewEndS), wLast = wAt(lastT);
     const tail = lastT > brewEndS ? { endS: lastT, gainG: wEnd !== null && wLast !== null ? wLast - wEnd : null } : null;
     return strip ? { strip, firstDropS: firstDropS(chartSamples), tail } : null;
-  }, [samples, chartSamples, stages, brewSteps, scriptContent, shot.stopMode, shot.yieldTargetG]);
+  }, [brewEndS, chartSamples, stages, brewSteps, scriptContent, shot.stopMode, shot.yieldTargetG]);
 
   // Averages + peak weight across the recorded samples.
   const agg = useMemo(() => {
@@ -608,15 +568,6 @@ export function ShotDetailModal({ shot, mobile, onClose, onEdit, onDelete, onUpd
               <span style={{ ...MONO }}>#{shot.id}</span> · {formatDateTime(shot.startedAt, locale)}
             </div>
           </div>
-          {onToggleBest && shot.category === "brew" && (
-            <button
-              onClick={() => { const next = !isBest; setIsBest(next); onToggleBest(shot, next); }}
-              title={isBest ? t("bestBrew.unflag") : t("bestBrew.flag")}
-              style={{ ...iconBtn, color: isBest ? BEST : C.mut }}
-            >
-              <Star size={16} fill={isBest ? BEST : "none"} />
-            </button>
-          )}
           {onRepeat && (
             <button
               onClick={() => onRepeat(shot)}

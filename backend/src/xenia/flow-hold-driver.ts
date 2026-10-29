@@ -12,7 +12,8 @@
  *                    is no dedicated ramp phase — pre-infusion is an explicit
  *                    PowerStep, and a flow/pressure step can ease in via rampMs
  *                    (linear setpoint interpolation from entry value to target).
- *   hold:            per-step control (flow/pressure PI loop or open-loop power);
+ *   hold:            per-step control (flow PI loop, pressure lead control or
+ *                    open-loop power);
  *                    BBW-style projection on weight decides the normal stop.
  *   hold → stopping: normal exit — paddle/stop (pump running) → pumppower=0 → SB
  *                    cleanup. Per Block-1 diagnosis paddle/stop drains internally.
@@ -51,9 +52,9 @@ import {
   parsePumpCurve,
   preinfusionArrivalGs,
   preinfusionPower,
-  pressureRampFeedForward,
   type PumpCurve,
 } from "../../../shared/src/pump-curve.js";
+import { DEFAULT_PRESSURE_LEAD, PressureLeadController, SOLL_LOOKAHEAD_MS } from "../../../shared/src/pressure-lead-controller.js";
 import {
   evaluateWatchdog,
   WATCHDOG_REFIRE_INTERVAL_MS,
@@ -72,6 +73,7 @@ import type { ShotRecorder } from "../shots/recorder.js";
 import type { ShotStageInput, StageTransition } from "../db/shot-repo.js";
 import type { SettingsRepo } from "../db/settings-repo.js";
 import type { Logger } from "../log.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -190,10 +192,6 @@ const RESEND_DEVIATION_PCT = 2;
 const RESEND_AFTER_MS = 1_500;
 const RESEND_MAX = 3;
 
-/** Pressure-step PI gains (power% per bar). Conservative starting points — pressure
- *  responds much faster than flow, so lower gains than the flow loop. Tuned live. */
-const PRESSURE_KP = 6;
-const PRESSURE_KI = 2;
 /** Limiter back-off: when a step's cap (maxPressureBar / maxFlowGs) is exceeded,
  *  bleed the commanded power down by this much per tick toward the floor until the
  *  capped quantity falls back under its limit. Actively relieves an over-cap. */
@@ -247,9 +245,8 @@ export class FlowHoldDriver {
   private pumpOnMs = 0;
 
   private controller: FlowController | null = null;
-  private pressureController: PIController | null = null;
-  /** Solldruck des letzten Takts — fuer die Vorsteuerung einer fallenden Rampe. */
-  private lastPressureSoll: number | null = null;
+  /** Druckstufen: Regelung mit Vorhalt (shared/pressure-lead-controller.ts). */
+  private pressureLead: PressureLeadController | null = null;
   private bbw: BrewByWeightController | null = null;
 
   // Resolved step sequence + stage-machine bookkeeping. Steps run in one paddle
@@ -275,6 +272,8 @@ export class FlowHoldDriver {
   private stageRampFrom = 0;
   private stageTarget = 0;
   private stageRampMs = 0;
+  /** Ziel der Stufe vom Puck übernommen (adoptFlow/adoptPressure mit Messwert). */
+  private stageAdopted = false;
   private lastFlowTarget = 0;
   private lastPowerTarget = 0;
 
@@ -360,10 +359,10 @@ export class FlowHoldDriver {
     lastFrame: LiveFrame | null,
   ): Promise<FlowHoldConfig> {
     if (this.startsBlocked) {
-      throw new Error("Server is shutting down — flow-hold drive start refused");
+      throw new Error(L("Der Server fährt gerade herunter — Bezug nicht gestartet.", "Server is shutting down — flow-hold drive start refused"));
     }
     if (this.isActive()) {
-      throw new Error("A flow-hold drive is already running");
+      throw new Error(L("Es läuft bereits ein App-Bezug.", "A flow-hold drive is already running"));
     }
 
     const cfg: FlowHoldConfig = {
@@ -378,10 +377,10 @@ export class FlowHoldDriver {
       lastFrame !== null &&
       lastFrame.brewBoilerTempC < cfg.warmupMinBrewBoilerC
     ) {
-      throw new Error(
-        `Brew boiler too cold: ${lastFrame.brewBoilerTempC.toFixed(1)}°C < ` +
-          `${cfg.warmupMinBrewBoilerC}°C — warm up before a flow-hold drive`,
-      );
+      throw new Error(L(
+        `Brühkessel zu kalt: ${lastFrame.brewBoilerTempC.toFixed(1)} °C < ${cfg.warmupMinBrewBoilerC} °C — bitte aufheizen lassen.`,
+        `Brew boiler too cold: ${lastFrame.brewBoilerTempC.toFixed(1)}°C < ${cfg.warmupMinBrewBoilerC}°C — warm up before a flow-hold drive`,
+      ));
     }
 
     // Scale-zero precondition (point 3): the scale must be tared before a drive.
@@ -393,10 +392,10 @@ export class FlowHoldDriver {
       lastFrame.scaleWeightG !== null &&
       Math.abs(lastFrame.scaleWeightG) > SCALE_ZERO_TOL_G
     ) {
-      throw new Error(
-        `Waage nicht genullt (${lastFrame.scaleWeightG.toFixed(1)} g) — ` +
-          `bitte vor dem Flow-Bezug tarieren.`,
-      );
+      throw new Error(L(
+        `Waage nicht genullt (${lastFrame.scaleWeightG.toFixed(1)} g) — bitte vor dem Bezug tarieren.`,
+        `Scale not zeroed (${lastFrame.scaleWeightG.toFixed(1)} g) — please tare it before the brew.`,
+      ));
     }
 
     // Resolve + validate the step sequence (from the profile's BrewProfile)
@@ -424,16 +423,7 @@ export class FlowHoldDriver {
     this.stageIndex = 0;
     this.stageStartAt = this.startedAt;
     this.controller = this.makeController(controllerKind, cfg);
-    this.pressureController = new PIController({
-      kp: PRESSURE_KP,
-      ki: PRESSURE_KI,
-      setpoint: 0, // set on entry to a pressure step
-      outMin: cfg.powerFloor,
-      outMax: cfg.powerCeil,
-      emaAlpha: cfg.emaAlpha,
-      slewUpPerS: cfg.slewUpPerS,
-      slewDownPerS: cfg.slewDownPerS,
-    });
+    this.pressureLead = new PressureLeadController(this.pumpCurve, { ...DEFAULT_PRESSURE_LEAD, outMin: cfg.powerFloor, outMax: cfg.powerCeil });
     this.bbw = cfg.yieldTargetG !== null ? new BrewByWeightController(cfg.yieldTargetG, cfg.bbwWindowMs, cfg.bbwResidualLagS) : null;
 
     // Enter step 0 directly — no ramp phase. enterStage seeds the controller and
@@ -643,7 +633,7 @@ export class FlowHoldDriver {
     yieldG: number | null,
   ): BrewStep[] {
     if (!raw || raw.length === 0) {
-      if (yieldG === null) throw new Error("Ohne Ziel braucht der Bezug Stufen, deren letzte einen Ausstieg hat.");
+      if (yieldG === null) throw new Error(L("Ohne Ziel braucht der Bezug Stufen, deren letzte einen Ausstieg hat.", "Without a target the brew needs stages whose last one has an exit."));
       return [{ kind: "flow", targetFlowGs: flatFlowGs, exit: { weightG: yieldG } }];
     }
     // The same rule the profile API applies on save. A sequence stored before
@@ -652,7 +642,7 @@ export class FlowHoldDriver {
     if (!check.ok) throw new Error(check.error);
     // Ohne Ziel ist die letzte Stufe das Ende — ohne Ausstieg liefe die Pumpe bis zur Grenze.
     if (yieldG === null && !endsWithoutYield(raw)) {
-      throw new Error("Ohne Ziel braucht die letzte Stufe einen Ausstieg (Zeit, Gewicht, Druck oder Fluss).");
+      throw new Error(L("Ohne Ziel braucht die letzte Stufe einen Ausstieg (Zeit, Gewicht, Druck oder Fluss).", "Without a target the last stage needs an exit (time, weight, pressure or flow)."));
     }
     return raw;
   }
@@ -763,7 +753,12 @@ export class FlowHoldDriver {
       enteredAt,
     });
     this.recorder.setDriveStages(this.stageTransitions);
-    this.onStage?.({ index, kind: step.kind, name: step.name?.trim() || null, tone: step.tone === true });
+    this.onStage?.({
+      index, kind: step.kind, name: step.name?.trim() || null, tone: step.tone === true, enteredAt,
+      // Nach enterStage: die Werte, mit denen die Stufe tatsächlich fährt.
+      setpoint: step.kind === "preinfusion" ? null
+        : { from: this.stageRampFrom, to: this.stageTarget, rampMs: this.stageRampMs, adopted: this.stageAdopted },
+    });
   }
 
   /** Map the internal advance reason to the persisted StepExit field name. */
@@ -833,6 +828,7 @@ export class FlowHoldDriver {
         this.stageRampFrom = rampMs > 0 ? measuredFlow : target;
         this.stageTarget = target;
         this.stageRampMs = rampMs;
+        this.stageAdopted = target !== step.targetFlowGs;
         this.lastFlowTarget = target;
         // Seed the plant conductance from the real operating point (flow ÷ power)
         // when there is usable flow: the feed-forward then computes the right pump
@@ -857,9 +853,7 @@ export class FlowHoldDriver {
         this.stageRampFrom = rampMs > 0 ? this.lastPressureBar : target;
         this.stageTarget = target;
         this.stageRampMs = rampMs;
-        this.pressureController!.seed(seedPower);
-        this.pressureController!.setSetpoint(this.stageRampFrom);
-        this.lastPressureSoll = this.stageRampFrom;
+        this.stageAdopted = target !== step.targetPressureBar;
         break;
       }
       case "power": {
@@ -867,6 +861,7 @@ export class FlowHoldDriver {
         this.stageRampFrom = rampMs > 0 ? this.lastPowerTarget : step.power;
         this.stageTarget = step.power;
         this.stageRampMs = rampMs;
+        this.stageAdopted = false;
         this.lastPowerTarget = step.power;
         break;
       }
@@ -897,19 +892,14 @@ export class FlowHoldDriver {
         return out;
       }
       case "pressure": {
-        const soll = this.rampedSetpoint(now);
-        // Fallende Rampe: den Arbeitspunkt mitfuehren, statt dass der I-Anteil ihn ueber
-        // einen bleibenden Fehler nachholt (#285: im Mittel 0,7 bar ueber dem Soll).
-        // Steigende Rampen bleiben, wie sie sind — dort begrenzen Anstiegsgrenze und
-        // Pumpe ohnehin (Druckspitze von Adaptive Gagné · 9 bar).
-        if (this.lastPressureSoll !== null && soll < this.lastPressureSoll) {
-          this.pressureController!.shift(
-            pressureRampFeedForward(this.pumpCurve, soll - this.lastPressureSoll, frame.pumpPressureBar, flow),
-          );
-        }
-        this.lastPressureSoll = soll;
-        this.pressureController!.setSetpoint(soll);
-        const out = this.pressureController!.update(frame.pumpPressureBar, dtMs).output;
+        const out = this.pressureLead!.update({
+          nowMs: now,
+          pressureBar: frame.pumpPressureBar,
+          outflowMlS: flow,
+          soll: this.rampedSetpoint(now),
+          sollAhead: this.rampedSetpoint(now + SOLL_LOOKAHEAD_MS),
+          dtS: dtMs / 1000,
+        }).output;
         if (step.maxFlowGs !== undefined && flow > step.maxFlowGs) {
           return this.backOff();
         }
@@ -1447,6 +1437,7 @@ export class FlowHoldDriver {
     this.stageRampFrom = 0;
     this.stageTarget = 0;
     this.stageRampMs = 0;
+    this.stageAdopted = false;
     this.lastFlowTarget = 0;
     this.lastPowerTarget = 0;
     this.pumpOnMs = 0;

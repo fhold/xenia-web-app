@@ -131,7 +131,6 @@ export const profileList = {
     ratingAria: "Bewertung im Schnitt {avg} von 5, {n} bewertet",
     noShotsVariant: "Noch kein Bezug mit dieser Variante.",
     inHistory: "In der Historie ({n})",
-    reference: "Referenz",
     coffee: "Sorte",
   },
 };

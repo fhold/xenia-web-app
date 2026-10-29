@@ -1,6 +1,7 @@
 import { getDb } from "./index.js";
 import type { BrewProfile, ProfileVariant, ProfileVariantInput, ShotSize } from "../../../shared/src/types.js";
 import { endsWithoutYield } from "../../../shared/src/brew-steps.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 /**
  * Varianten eines Profils (vereinter Editor, Schnitt 3).
@@ -200,7 +201,7 @@ export function resolveStart(
   req: { variantId?: number | null; basketId?: number | null; shotSize: ShotSize },
 ): StartResolution {
   const basketType = (id: number | null): string | null | undefined => (id === null ? null : basketTypeOf(id));
-  if (req.basketId != null && basketType(req.basketId) === undefined) return { ok: false, error: `Sieb ${req.basketId} gibt es nicht.` };
+  if (req.basketId != null && basketType(req.basketId) === undefined) return { ok: false, error: L(`Sieb ${req.basketId} gibt es nicht.`, `Basket ${req.basketId} does not exist.`) };
   if (req.variantId == null) {
     const v = all.find((x) => x.legacySlot === req.shotSize) ?? null;
     return {
@@ -209,7 +210,7 @@ export function resolveStart(
     };
   }
   const v = all.find((x) => x.id === req.variantId);
-  if (!v) return { ok: false, error: `Variante ${req.variantId} gehört nicht zu diesem Profil.` };
+  if (!v) return { ok: false, error: L(`Variante ${req.variantId} gehört nicht zu diesem Profil.`, `Variant ${req.variantId} does not belong to this profile.`) };
   const eff = v.sameAsId !== null ? (all.find((x) => x.id === v.sameAsId) ?? v) : v;
   const basketId = req.basketId ?? v.defaultBasketId;
   return {
@@ -250,38 +251,38 @@ export function checkVariants(
   list: unknown,
   has: { basket: (id: number) => boolean; script: (id: number) => boolean; validSteps: (bp: BrewProfile) => string | null },
 ): string | null {
-  if (!Array.isArray(list) || list.length === 0) return "Ein Profil braucht mindestens eine Variante.";
-  if (list.length > 8) return "Höchstens 8 Varianten.";
+  if (!Array.isArray(list) || list.length === 0) return L("Ein Profil braucht mindestens eine Variante.", "A profile needs at least one variant.");
+  if (list.length > 8) return L("Höchstens 8 Varianten.", "At most 8 variants.");
   const names = new Set<string>();
   for (let i = 0; i < list.length; i++) {
     const v = list[i] as VariantInput;
-    const label = `Variante ${i + 1}`;
-    if (typeof v !== "object" || v === null || typeof v.name !== "string") return `${label}: ungültig.`;
+    const label = L(`Variante ${i + 1}`, `Variant ${i + 1}`);
+    if (typeof v !== "object" || v === null || typeof v.name !== "string") return L(`${label}: ungültig.`, `${label}: invalid.`);
     const ints = [v.id, v.defaultBasketId, v.scriptId, v.sameAs];
-    if (ints.some((x) => x != null && !Number.isInteger(x)) || (v.yieldG != null && !Number.isFinite(v.yieldG))) return `${label}: ungültige Zahl.`;
+    if (ints.some((x) => x != null && !Number.isInteger(x)) || (v.yieldG != null && !Number.isFinite(v.yieldG))) return L(`${label}: ungültige Zahl.`, `${label}: invalid number.`);
     const name = v.name.trim();
-    if (name.length === 0 || name.length > 40) return `${label}: Name fehlt oder ist länger als 40 Zeichen.`;
-    if (names.has(name.toLowerCase())) return `Variante „${name}“ gibt es zweimal.`;
+    if (name.length === 0 || name.length > 40) return L(`${label}: Name fehlt oder ist länger als 40 Zeichen.`, `${label}: name missing or longer than 40 characters.`);
+    if (names.has(name.toLowerCase())) return L(`Variante „${name}“ gibt es zweimal.`, `Variant “${name}” exists twice.`);
     names.add(name.toLowerCase());
     const curves = [v.scriptId != null, v.brewSteps != null, v.sameAs != null].filter(Boolean).length;
-    if (curves !== 1) return `„${name}“: braucht genau eine Kurve (Skript, Stufen oder wie eine andere Variante).`;
+    if (curves !== 1) return L(`„${name}“: braucht genau eine Kurve (Skript, Stufen oder wie eine andere Variante).`, `“${name}”: needs exactly one curve (script, stages or same as another variant).`);
     if (v.sameAs != null) {
       const t = list[v.sameAs] as VariantInput | undefined;
-      if (v.sameAs === i || t === undefined || t.sameAs != null) return `„${name}“: „wie Variante“ muss auf eine Variante mit eigener Kurve zeigen.`;
+      if (v.sameAs === i || t === undefined || t.sameAs != null) return L(`„${name}“: „wie Variante“ muss auf eine Variante mit eigener Kurve zeigen.`, `“${name}”: “same as variant” must point to a variant with its own curve.`);
     }
-    if (v.defaultBasketId != null && !has.basket(v.defaultBasketId)) return `„${name}“: Sieb ${v.defaultBasketId} gibt es nicht.`;
-    if (v.scriptId != null && !has.script(v.scriptId)) return `„${name}“: Skript ${v.scriptId} gibt es nicht.`;
+    if (v.defaultBasketId != null && !has.basket(v.defaultBasketId)) return L(`„${name}“: Sieb ${v.defaultBasketId} gibt es nicht.`, `“${name}”: basket ${v.defaultBasketId} does not exist.`);
+    if (v.scriptId != null && !has.script(v.scriptId)) return L(`„${name}“: Skript ${v.scriptId} gibt es nicht.`, `“${name}”: script ${v.scriptId} does not exist.`);
     if (v.brewSteps != null) {
       const err = has.validSteps(v.brewSteps);
       if (err) return `„${name}“: ${err}`;
     }
     const pn = v.phaseNames;
     if (pn != null && (!Array.isArray(pn) || pn.length > 50 || pn.some((n) => n !== null && (typeof n !== "string" || n.length > 40)))) {
-      return `„${name}“: Phasennamen ungültig (höchstens 50, je 40 Zeichen).`;
+      return L(`„${name}“: Phasennamen ungültig (höchstens 50, je 40 Zeichen).`, `“${name}”: invalid stage names (at most 50, 40 characters each).`);
     }
     const steps = effective(list as VariantInput[], i).brewSteps;
     if (steps != null && !(v.yieldG != null && v.yieldG > 0) && !endsWithoutYield(steps.steps)) {
-      return `„${name}“: läuft in der App und braucht einen Yield — oder einen Ausstieg in der letzten Phase, die den Bezug dann beendet.`;
+      return L(`„${name}“: läuft in der App und braucht einen Yield — oder einen Ausstieg in der letzten Phase, die den Bezug dann beendet.`, `“${name}”: runs in the app and needs a yield — or an exit in the last stage, which then ends the brew.`);
     }
   }
   return null;

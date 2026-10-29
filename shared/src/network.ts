@@ -35,8 +35,6 @@ export interface NetShot {
   channeling: boolean;
   channelingSeverity: ChannelingSeverity | null;
   tasteTags: string[] | null;
-  /** Referenz-Bezug (best_brew) seiner Sorte. */
-  isBestBrew: boolean;
 }
 
 /** Channeling des letzten Bezugs: keins/leicht/stark, „yes“ = markiert ohne Staerke; null = nicht bewertet. */
@@ -63,8 +61,6 @@ export interface NetRow {
     variantId: number | null;
     basketId: number | null;
   };
-  /** Referenz-Bezug in dieser Zeile (★), mit seinem Mahlgrad. */
-  reference: { shotId: number; grind: number | null } | null;
 }
 
 export interface NetGroup {
@@ -104,7 +100,7 @@ export function groupNetwork(
     let r = g.rows.get(rk.key);
     if (!r) {
       r = {
-        r: { ...rk, n: 0, grindMin: null, grindMax: null, ratingAvg: null, rated: 0, last: null as unknown as NetRow["last"], reference: null },
+        r: { ...rk, n: 0, grindMin: null, grindMax: null, ratingAvg: null, rated: 0, last: null as unknown as NetRow["last"] },
         sum: 0,
       };
       g.rows.set(rk.key, r);
@@ -122,12 +118,10 @@ export function groupNetwork(
     }
     // Aufsteigend sortiert: der letzte gewinnt.
     x.last = { shotId: s.id, at: s.startedAt, grind: s.grindSetting, note: s.grindNote, channeling: channelingOf(s), variantId: s.variantId, basketId: s.basketId };
-    if (s.isBestBrew) x.reference = { shotId: s.id, grind: s.grindSetting };
   }
   const out = [...groups.values()].map(({ g, rows }) => ({
     ...g,
-    rows: [...rows.values()].map((v) => v.r).sort((a, b) =>
-      Number(b.reference !== null) - Number(a.reference !== null) || b.n - a.n || b.last.at - a.last.at),
+    rows: [...rows.values()].map((v) => v.r).sort((a, b) => b.n - a.n || b.last.at - a.last.at),
   }));
   return out.sort((a, b) => b.n - a.n);
 }

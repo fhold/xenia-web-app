@@ -40,6 +40,7 @@ import type {
   ExecuteResult,
   LiveFrame,
 } from "../../../shared/src/types.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 /** The machine's own name rule (modeler.js): no leading/trailing blank,
  *  only letters, digits, "-", "_", "#" and spaces. */
@@ -58,7 +59,7 @@ export function checkWrite(
   const title = typeof body.title === "string" ? body.title : "";
   const content = typeof body.content === "string" ? body.content : "";
 
-  if (title === "") return { ok: false, error: "Name fehlt" };
+  if (title === "") return { ok: false, error: L("Name fehlt", "Name missing") };
   if (!NAME_RE.test(title)) {
     return {
       ok: false,
@@ -159,7 +160,7 @@ export function registerScriptRoutes(
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: "Es läuft bereits ein Bezug. Bitte zuerst beenden.",
+        error: L("Es läuft bereits ein Bezug. Bitte zuerst beenden.", "A brew is already running. Please finish it first."),
       };
       return res;
     }
@@ -191,7 +192,7 @@ export function registerScriptRoutes(
     const profile = profileRepo.findById(profileId);
     if (!profile) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Profile ${profileId} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Profil ${profileId} nicht gefunden`, `Profile ${profileId} not found`) };
       return res;
     }
 
@@ -212,8 +213,8 @@ export function registerScriptRoutes(
       const res: ApiResponse = {
         ok: false,
         error: start.fromVariant
-          ? "Diese Variante läuft in der App, nicht als Skript."
-          : "No double script configured for this profile",
+          ? L("Diese Variante läuft in der App, nicht als Skript.", "This variant runs in the app, not as a script.")
+          : L("Für dieses Profil ist kein 2×-Skript eingerichtet", "No double script configured for this profile"),
       };
       return res;
     }
@@ -342,7 +343,7 @@ export function registerScriptRoutes(
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: "Es läuft ein Bezug — Skripte können erst danach geschrieben werden.",
+        error: L("Es läuft ein Bezug — Skripte können erst danach geschrieben werden.", "A brew is running — scripts can only be written afterwards."),
       };
       return res;
     }
@@ -379,14 +380,14 @@ export function registerScriptRoutes(
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid script ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Skript-ID", "Invalid script ID") };
       return res;
     }
     if (brewActive()) {
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: "Es läuft ein Bezug — Skripte können erst danach geschrieben werden.",
+        error: L("Es läuft ein Bezug — Skripte können erst danach geschrieben werden.", "A brew is running — scripts can only be written afterwards."),
       };
       return res;
     }
@@ -400,7 +401,7 @@ export function registerScriptRoutes(
     // Nie blind ueberschreiben: der Stand, von dem aus bearbeitet wurde, muss mit.
     if (typeof body.expectedContent !== "string") {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "expectedContent fehlt" };
+      const res: ApiResponse = { ok: false, error: L("expectedContent fehlt", "expectedContent is missing") };
       return res;
     }
     try {
@@ -425,14 +426,14 @@ export function registerScriptRoutes(
     const numId = parseInt((req.params as { id: string }).id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid script ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Skript-ID", "Invalid script ID") };
       return res;
     }
     if (brewActive()) {
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: "Es läuft ein Bezug — Skripte können erst danach gelöscht werden.",
+        error: L("Es läuft ein Bezug — Skripte können erst danach gelöscht werden.", "A brew is running — scripts can only be deleted afterwards."),
       };
       return res;
     }
@@ -443,7 +444,7 @@ export function registerScriptRoutes(
       reply.status(409);
       const res: ApiResponse = {
         ok: false,
-        error: `Skript wird von Profil(en) benutzt: ${users.map((p) => p.name).join(", ")}`,
+        error: L(`Skript wird von Profil(en) benutzt: ${users.map((p) => p.name).join(", ")}`, `The script is used by profile(s): ${users.map((p) => p.name).join(", ")}`),
       };
       return res;
     }
@@ -469,7 +470,7 @@ export function registerScriptRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid script ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Skript-ID", "Invalid script ID") };
       return res;
     }
     const { override } = (req.body ?? {}) as { override?: unknown };
@@ -477,13 +478,13 @@ export function registerScriptRoutes(
       reply.status(400);
       const res: ApiResponse = {
         ok: false,
-        error: "override must be 'brew', 'maintenance' or null",
+        error: L("override muss 'brew', 'maintenance' oder leer sein", "override must be 'brew', 'maintenance' or null"),
       };
       return res;
     }
     if (!scriptRepo.findById(numId)) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Script ${id} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Skript ${id} nicht gefunden`, `Script ${id} not found`) };
       return res;
     }
     scriptRepo.setCategoryOverride(numId, override);
@@ -500,7 +501,7 @@ export function registerScriptRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid script ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Skript-ID", "Invalid script ID") };
       return res;
     }
     try {
@@ -521,13 +522,13 @@ export function registerScriptRoutes(
     const numId = parseInt(id, 10);
     if (Number.isNaN(numId)) {
       reply.status(400);
-      const res: ApiResponse = { ok: false, error: "Invalid script ID" };
+      const res: ApiResponse = { ok: false, error: L("Ungültige Skript-ID", "Invalid script ID") };
       return res;
     }
     const script = scriptRepo.findById(numId);
     if (!script) {
       reply.status(404);
-      const res: ApiResponse = { ok: false, error: `Script ${id} not found` };
+      const res: ApiResponse = { ok: false, error: L(`Skript ${id} nicht gefunden`, `Script ${id} not found`) };
       return res;
     }
     return script;

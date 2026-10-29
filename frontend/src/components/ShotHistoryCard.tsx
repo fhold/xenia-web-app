@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import { hasRating, ratedWithoutStars } from "@shared/shot-rating.js";
-import { Pencil, Trash2, StickyNote, Repeat, AlertTriangle, ShieldAlert, Star, ClipboardCheck, MoreHorizontal, ArrowLeftRight } from "lucide-react";
+import { Pencil, Trash2, StickyNote, Repeat, AlertTriangle, ShieldAlert, ClipboardCheck, MoreHorizontal, ArrowLeftRight } from "lucide-react";
 import { useTranslation } from "../i18n/index.js";
 import { stopModeLabel } from "../lib/stopMode.js";
 import { formatDay } from "../lib/dates.js";
@@ -19,8 +19,6 @@ import type { ShotListItem } from "@shared/types.js";
 import theme, { alpha } from "../theme.js";
 
 const C = theme;
-// Best-Brew accent — the flagged-reference star colour (per BB-a spec).
-const BEST = C.acc;
 const MONO: React.CSSProperties = { fontFamily: "'JetBrains Mono', monospace" };
 const ellipsis: React.CSSProperties = {
   whiteSpace: "nowrap",
@@ -67,8 +65,6 @@ interface ShotHistoryCardProps {
   onRepeat?: (shot: ShotListItem) => void;
   /** Disables the repeat action (e.g. while a brew is running). */
   repeatBlocked?: boolean;
-  /** Flag/move (or clear) the Best-Brew reference. Only shown for brew shots. */
-  onToggleBest?: (shot: ShotListItem, makeBest: boolean) => void;
   onDelete: (shot: ShotListItem) => void;
   /** Bezuege vergleichen: diesen als A nehmen und den zweiten antippen. */
   onCompare?: (shot: ShotListItem) => void;
@@ -77,7 +73,7 @@ interface ShotHistoryCardProps {
   mobile?: boolean;
 }
 
-export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit, onRepeat, repeatBlocked, onToggleBest, onDelete, onCompare, highlight = false, mobile = false }: ShotHistoryCardProps) {
+export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit, onRepeat, repeatBlocked, onDelete, onCompare, highlight = false, mobile = false }: ShotHistoryCardProps) {
   const { t, lang } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const dateLabel = formatAbsoluteDate(shot.startedAt, lang === "de" ? "de-DE" : "en-US");
@@ -213,17 +209,6 @@ export function ShotHistoryCard({ shot, basketName, variantName, onOpen, onEdit,
 
       {/* Aktionen */}
       <div style={{ width: mobile ? undefined : HISTORY_COLS.actions, marginLeft: mobile ? "auto" : 0, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: 4 }}>
-        {onToggleBest && shot.category === "brew" && (
-          <button
-            onClick={(e) => { stop(e); onToggleBest(shot, !shot.isBestBrew); }}
-            title={shot.isBestBrew ? t("bestBrew.unflag") : t("bestBrew.flag")}
-            aria-label={shot.isBestBrew ? t("bestBrew.unflag") : t("bestBrew.flag")}
-            aria-pressed={shot.isBestBrew}
-            style={{ ...actionBtn, color: shot.isBestBrew ? BEST : C.mut }}
-          >
-            <Star size={15} fill={shot.isBestBrew ? BEST : "none"} />
-          </button>
-        )}
         {onRepeat && (
           <button
             onClick={(e) => { stop(e); onRepeat(shot); }}

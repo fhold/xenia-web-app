@@ -6,7 +6,7 @@
  *      OUTSIDE a shot's own range: a 20 s ghost must stop at 20 s, not run
  *      flat to the right edge and claim it was still brewing.
  *   2. listGhostCandidates() — which past shots are allowed into the cloud.
- *      A throwaway temp DB (same approach as best-brew.test.ts: explicit DDL,
+ *      A throwaway temp DB (explicit DDL,
  *      not applySchema(), whose migration chain assumes an evolving live DB).
  */
 

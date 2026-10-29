@@ -9,6 +9,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { normalizeMachineAddress } from "../../../shared/src/machine-address.js";
+import { L } from "../../../shared/src/shared-lang.js";
 
 export interface MachineAddressDeps {
   client: { readonly host: string; setHost(host: string): void };
@@ -23,11 +24,11 @@ export function registerMachineAddressRoute(app: FastifyInstance, deps: MachineA
     const address = typeof body?.address === "string" ? normalizeMachineAddress(body.address) : null;
     if (address === null) {
       reply.status(400);
-      return { ok: false, error: "Ungültige Adresse — erwartet IP oder Hostname, optional mit :Port" };
+      return { ok: false, error: L("Ungültige Adresse — erwartet IP oder Hostname, optional mit :Port", "Invalid address — expected an IP or host name, optionally with :port") };
     }
     if (deps.isBrewing()) {
       reply.status(409);
-      return { ok: false, error: "Während eines Bezugs lässt sich die Adresse nicht ändern" };
+      return { ok: false, error: L("Während eines Bezugs lässt sich die Adresse nicht ändern", "The address cannot be changed during a brew") };
     }
     const from = deps.client.host;
     deps.settings.set("machine_ip", address);

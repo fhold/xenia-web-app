@@ -61,7 +61,6 @@ function makeApp(opts: { driveActive: boolean; scriptStopFails?: boolean }): Har
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
     () => {},
     driver as never,
   );

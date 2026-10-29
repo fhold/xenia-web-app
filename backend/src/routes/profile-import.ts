@@ -40,7 +40,7 @@ import {
   type ProfileImportResult,
 } from "../../../shared/src/profile-file.js";
 import { translateDecent } from "../../../shared/src/decent-profile.js";
-import { withSharedLang, type SharedLang } from "../../../shared/src/shared-lang.js";
+import { L, withSharedLang, type SharedLang } from "../../../shared/src/shared-lang.js";
 import type { ApiResponse, LiveFrame, ProfileCreate, ProfileVariantInput } from "../../../shared/src/types.js";
 
 type Choice = "reuse" | "create";
@@ -101,7 +101,7 @@ export function registerProfileImportRoutes(
         const sp = vp.script;
         const choice = sp.status === "conflict" ? choices[String(i)] : null;
         if (sp.status === "conflict" && choice !== "reuse" && choice !== "create") {
-          return { ok: false, error: `„${v.name}“: Ein anderes Skript „${sp.title}“ gibt es schon — vorhandenes verwenden oder neu anlegen?` };
+          return { ok: false, error: L(`„${v.name}“: Ein anderes Skript „${sp.title}“ gibt es schon — vorhandenes verwenden oder neu anlegen?`, `“${v.name}”: another script “${sp.title}” already exists — use the existing one or create a new one?`) };
         }
         if (sp.status === "same" || (sp.status === "conflict" && choice === "reuse")) {
           const id = sp.scriptId;
@@ -114,7 +114,7 @@ export function registerProfileImportRoutes(
           if (!ps) {
             const title = freeTitle(v.script.title, titles);
             const checked = checkWrite({ title, content: v.script.content });
-            if (!checked.ok) return { ok: false, error: `„${v.name}“, Skript „${title}“: ${checked.error}` };
+            if (!checked.ok) return { ok: false, error: L(`„${v.name}“, Skript „${title}“: ${checked.error}`, `“${v.name}”, script “${title}”: ${checked.error}`) };
             titles.add(title);
             ps = { placeholder: -(pending.length + 1), title, instruction: checked.instruction };
             pending.push(ps);
@@ -124,7 +124,7 @@ export function registerProfileImportRoutes(
         }
       }
       const sameAs = v.sameAs !== null ? names.indexOf(v.sameAs) : null;
-      if (sameAs === -1) return { ok: false, error: `„${v.name}“: „wie ${v.sameAs}“ — diese Variante fehlt in der Datei.` };
+      if (sameAs === -1) return { ok: false, error: L(`„${v.name}“: „wie ${v.sameAs}“ — diese Variante fehlt in der Datei.`, `“${v.name}”: “same as ${v.sameAs}” — this variant is missing from the file.`) };
       variants.push({
         name: v.name,
         defaultBasketId: vp.basketId,
@@ -187,12 +187,12 @@ export function registerProfileImportRoutes(
     if (!read.ok) return { ok: false, res: fail(reply, 400, read.error) };
     if (read.profile.variants.some((v) => v.script)) {
       if (scriptWriteBlocked(recorder, getLastFrame())) {
-        return { ok: false, res: fail(reply, 409, "Es läuft ein Bezug — Profile mit Skript erst danach importieren.") };
+        return { ok: false, res: fail(reply, 409, L("Es läuft ein Bezug — Profile mit Skript erst danach importieren.", "A brew is running — import profiles with scripts afterwards.")) };
       }
       try {
         await syncAllScripts(client, scriptRepo);
       } catch {
-        return { ok: false, res: fail(reply, 502, "Die Maschine antwortet nicht — die Skripte lassen sich nicht abgleichen.") };
+        return { ok: false, res: fail(reply, 502, L("Die Maschine antwortet nicht — die Skripte lassen sich nicht abgleichen.", "The machine does not respond — the scripts cannot be compared.")) };
       }
     }
     return { ok: true, profile: read.profile, translation: read.translation };
